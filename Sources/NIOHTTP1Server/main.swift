@@ -270,7 +270,36 @@ private final class HTTPHandler: ChannelInboundHandler {
         case "/dynamic/continuous":
             return self.handleContinuousWrites
         case "/dynamic/count-to-ten":
-            return { self.handleMultipleWrites(context: $0, request: $1, strings: (1...10).map { "\($0)" }, delay: .milliseconds(100)) }
+            var content: [String] = [
+"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Chunked Transfer Test</title>
+<head>
+<body>
+
+"""
+]
+            for i in stride(from: 0, through: 9, by: 1) {
+                content.append(
+"""
+    <h2>Chunk #\(i)</h2>
+    <div>Lorem Ipsum</div>
+
+"""
+                )
+            }
+
+            content.append(
+"""
+</body>
+</html>
+
+"""
+            )
+            return { self.handleMultipleWrites(context: $0, request: $1, strings: content, delay: .milliseconds(100)) }
         case "/dynamic/client-ip":
             return { context, req in self.handleJustWrite(context: context, request: req, string: "\(context.remoteAddress.debugDescription)") }
         default:
