@@ -27,7 +27,7 @@ class EchoServerClientTest : XCTestCase {
         let numBytes = 16 * 1024
         let countingHandler = ByteCountingHandler(numBytes: numBytes, promise: group.next().makePromise())
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(countingHandler)
@@ -63,7 +63,7 @@ class EchoServerClientTest : XCTestCase {
         }
 
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(WriteALotHandler())
             }.bind(host: "127.0.0.1", port: 0).wait())
@@ -99,7 +99,7 @@ class EchoServerClientTest : XCTestCase {
             let numBytes = 16 * 1024
             let countingHandler = ByteCountingHandler(numBytes: numBytes, promise: group.next().makePromise())
             let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-                .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+                .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
                 // Set the handlers that are appled to the accepted Channels
                 .childChannelInitializer { channel in
@@ -141,7 +141,7 @@ class EchoServerClientTest : XCTestCase {
             let numBytes = 16 * 1024
             let countingHandler = ByteCountingHandler(numBytes: numBytes, promise: group.next().makePromise())
             let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-                .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+                .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
                 // Set the handlers that are appled to the accepted Channels
                 .childChannelInitializer { channel in
@@ -180,7 +180,7 @@ class EchoServerClientTest : XCTestCase {
 
         let handler = ChannelActiveHandler()
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .bind(host: "127.0.0.1", port: 0).wait())
 
         defer {
@@ -205,7 +205,7 @@ class EchoServerClientTest : XCTestCase {
         }
 
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(EchoServer())
             }.bind(host: "127.0.0.1", port: 0).wait())
@@ -313,8 +313,8 @@ class EchoServerClientTest : XCTestCase {
 
     private final class CloseInInActiveAndUnregisteredChannelHandler: ChannelInboundHandler {
         typealias InboundIn = Never
-        let alreadyClosedInChannelInactive = Atomic<Bool>(value: false)
-        let alreadyClosedInChannelUnregistered = Atomic<Bool>(value: false)
+        let alreadyClosedInChannelInactive = NIOAtomic<Bool>.makeAtomic(value: false)
+        let alreadyClosedInChannelUnregistered = NIOAtomic<Bool>.makeAtomic(value: false)
         let channelUnregisteredPromise: EventLoopPromise<Void>
         let channelInactivePromise: EventLoopPromise<Void>
 
@@ -382,8 +382,7 @@ class EchoServerClientTest : XCTestCase {
         }
 
         func channelActive(context: ChannelHandlerContext) {
-            var dataToWrite = context.channel.allocator.buffer(capacity: toWrite.utf8.count)
-            dataToWrite.writeString(toWrite)
+            let dataToWrite = context.channel.allocator.buffer(string: toWrite)
             context.writeAndFlush(NIOAny(dataToWrite), promise: nil)
             context.fireChannelActive()
         }
@@ -401,7 +400,7 @@ class EchoServerClientTest : XCTestCase {
                                                                    channelInactivePromise: inactivePromise)
 
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(handler)
@@ -435,7 +434,7 @@ class EchoServerClientTest : XCTestCase {
         let bytesReceivedPromise = group.next().makePromise(of: ByteBuffer.self)
         let byteCountingHandler = ByteCountingHandler(numBytes: writingBytes.utf8.count, promise: bytesReceivedPromise)
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 // When we've received all the bytes we know the connection is up. Remove the handler.
                 _ = bytesReceivedPromise.futureResult.flatMap { (_: ByteBuffer) in
@@ -457,8 +456,7 @@ class EchoServerClientTest : XCTestCase {
         }
 
         // First we confirm that the channel really is up by sending in the appropriate number of bytes.
-        var bytesToWrite = clientChannel.allocator.buffer(capacity: writingBytes.utf8.count)
-        bytesToWrite.writeString(writingBytes)
+        let bytesToWrite = clientChannel.allocator.buffer(string: writingBytes)
         let lastWriteFuture = clientChannel.writeAndFlush(NIOAny(bytesToWrite))
 
         // When we've received all the bytes we know the connection is up.
@@ -479,7 +477,7 @@ class EchoServerClientTest : XCTestCase {
         }
 
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(EchoServer())
             }.bind(host: "127.0.0.1", port: 0).wait())
@@ -513,7 +511,7 @@ class EchoServerClientTest : XCTestCase {
 
         let stringToWrite = "hello"
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(WriteOnConnectHandler(toWrite: stringToWrite))
             }.bind(host: "127.0.0.1", port: 0).wait())
@@ -546,7 +544,7 @@ class EchoServerClientTest : XCTestCase {
 
         dpGroup.enter()
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(EchoAndEchoAgainAfterSomeTimeServer(time: .seconds(1), secondWriteDoneHandler: {
                     dpGroup.leave()
@@ -563,8 +561,7 @@ class EchoServerClientTest : XCTestCase {
             .channelInitializer { $0.pipeline.addHandler(countingHandler) }
             .connect(to: serverChannel.localAddress!).wait())
 
-        var buffer = clientChannel.allocator.buffer(capacity: str.utf8.count)
-        buffer.writeString(str)
+        let buffer = clientChannel.allocator.buffer(string: str)
         try clientChannel.writeAndFlush(NIOAny(buffer)).wait()
 
         try countingHandler.assertReceived(buffer: buffer)
@@ -577,8 +574,11 @@ class EchoServerClientTest : XCTestCase {
 
     func testPendingReadProcessedAfterWriteError() throws {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-        let dpGroup = DispatchGroup()
+        defer {
+            XCTAssertNoThrow(try group.syncShutdownGracefully())
+        }
 
+        let dpGroup = DispatchGroup()
         dpGroup.enter()
 
         let str = "hi there"
@@ -597,7 +597,7 @@ class EchoServerClientTest : XCTestCase {
             }
 
             private func writeUntilFailed(_ context: ChannelHandlerContext, _ buffer: ByteBuffer) {
-                context.writeAndFlush(NIOAny(buffer)).whenComplete { (_: Result<Void, Error>) in
+                context.writeAndFlush(NIOAny(buffer)).whenSuccess {
                     context.eventLoop.execute {
                         self.writeUntilFailed(context, buffer)
                     }
@@ -617,8 +617,7 @@ class EchoServerClientTest : XCTestCase {
 
             func channelActive(context: ChannelHandlerContext) {
                 context.fireChannelActive()
-                var buffer = context.channel.allocator.buffer(capacity: str.utf8.count)
-                buffer.writeString(str)
+                let buffer = context.channel.allocator.buffer(string: str)
 
                 // write it four times and then close the connect.
                 context.writeAndFlush(NIOAny(buffer)).flatMap {
@@ -635,7 +634,7 @@ class EchoServerClientTest : XCTestCase {
             }
         }
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(WriteWhenActiveHandler(str, dpGroup))
             }.bind(host: "127.0.0.1", port: 0).wait())
@@ -665,8 +664,6 @@ class EchoServerClientTest : XCTestCase {
         completeBuffer.writeString(str)
 
         try countingHandler.assertReceived(buffer: completeBuffer)
-
-        XCTAssertNoThrow(try group.syncShutdownGracefully())
     }
 
     func testChannelErrorEOFNotFiredThroughPipeline() throws {
@@ -699,7 +696,7 @@ class EchoServerClientTest : XCTestCase {
         let promise = group.next().makePromise(of: Void.self)
 
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(ErrorHandler(promise))
             }.bind(host: "127.0.0.1", port: 0).wait())
@@ -722,14 +719,14 @@ class EchoServerClientTest : XCTestCase {
             defer {
                 XCTAssertNoThrow(try group.syncShutdownGracefully())
             }
-            let acceptedRemotePort: Atomic<Int> = Atomic(value: -1)
-            let acceptedLocalPort: Atomic<Int> = Atomic(value: -2)
+            let acceptedRemotePort: NIOAtomic<Int> = .makeAtomic(value: -1)
+            let acceptedLocalPort: NIOAtomic<Int> = .makeAtomic(value: -2)
             let sem = DispatchSemaphore(value: 0)
 
             let serverChannel: Channel
             do {
                 serverChannel = try ServerBootstrap(group: group)
-                    .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+                    .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
                     .childChannelInitializer { channel in
                         acceptedRemotePort.store(channel.remoteAddress?.port ?? -3)
                         acceptedLocalPort.store(channel.localAddress?.port ?? -4)
@@ -780,7 +777,7 @@ class EchoServerClientTest : XCTestCase {
 
         // we're binding to IPv4 only
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(countingHandler)
             }

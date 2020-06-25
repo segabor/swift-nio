@@ -49,15 +49,6 @@ final class MulticastTest: XCTestCase {
 
     struct ReceivedDatagramError: Error { }
 
-    private var supportsIPv6: Bool {
-        do {
-            let ipv6Loopback = try SocketAddress.makeAddressResolvingHost("::1", port: 0)
-            return try System.enumerateInterfaces().filter { $0.address == ipv6Loopback }.first != nil
-        } catch {
-            return false
-        }
-    }
-
     private func interfaceForAddress(address: String) throws -> NIONetworkInterface {
         let targetAddress = try SocketAddress(ipAddress: address, port: 0)
         guard let interface = try System.enumerateInterfaces().lazy.filter({ $0.address == targetAddress }).first else {
@@ -68,7 +59,7 @@ final class MulticastTest: XCTestCase {
 
     private func bindMulticastChannel(host: String, port: Int, multicastAddress: String, interface: NIONetworkInterface) -> EventLoopFuture<MulticastChannel> {
         return DatagramBootstrap(group: self.group)
-            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .bind(host: host, port: port)
             .flatMap { channel in
                 let channel = channel as! MulticastChannel
@@ -127,11 +118,11 @@ final class MulticastTest: XCTestCase {
 
         XCTAssertNoThrow(
             try sender.writeAndFlush(AddressedEnvelope(remoteAddress: multicastAddress, data: messageBuffer)).wait(),
-            file: file,
+            file: (file),
             line: line
         )
 
-        let receivedDatagram = try assertNoThrowWithValue(receivedMulticastDatagram.futureResult.wait(), file: file, line: line)
+        let receivedDatagram = try assertNoThrowWithValue(receivedMulticastDatagram.futureResult.wait(), file: (file), line: line)
         XCTAssertEqual(receivedDatagram.remoteAddress, sender.localAddress!)
         XCTAssertEqual(receivedDatagram.data, messageBuffer)
     }
@@ -155,12 +146,12 @@ final class MulticastTest: XCTestCase {
 
         XCTAssertNoThrow(
             try sender.writeAndFlush(AddressedEnvelope(remoteAddress: multicastAddress, data: messageBuffer)).wait(),
-            file: file,
+            file: (file),
             line: line
         )
 
         _ = multicastChannel.eventLoop.scheduleTask(in: timeout) { timeoutPromise.succeed(()) }
-        XCTAssertNoThrow(try timeoutPromise.futureResult.wait(), file: file, line: line)
+        XCTAssertNoThrow(try timeoutPromise.futureResult.wait(), file: (file), line: line)
     }
 
     func testCanJoinBasicMulticastGroupIPv4() throws {
@@ -207,7 +198,7 @@ final class MulticastTest: XCTestCase {
 
         // Now that we've joined the group, let's send to it.
         let sender = try assertNoThrowWithValue(DatagramBootstrap(group: self.group)
-            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .bind(host: "127.0.0.1", port: 0)
             .wait()
         )
@@ -220,7 +211,7 @@ final class MulticastTest: XCTestCase {
     }
 
     func testCanJoinBasicMulticastGroupIPv6() throws {
-        guard self.supportsIPv6 else {
+        guard System.supportsIPv6 else {
             // Skip on non-IPv6 systems
             return
         }
@@ -266,7 +257,7 @@ final class MulticastTest: XCTestCase {
 
         // Now that we've joined the group, let's send to it.
         let sender = try assertNoThrowWithValue(DatagramBootstrap(group: self.group)
-            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .bind(host: "::1", port: 0)
             .wait()
         )
@@ -300,7 +291,7 @@ final class MulticastTest: XCTestCase {
 
         // Now that we've joined the group, let's send to it.
         let sender = try assertNoThrowWithValue(DatagramBootstrap(group: self.group)
-            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .bind(host: "127.0.0.1", port: 0)
             .wait()
         )
@@ -317,7 +308,7 @@ final class MulticastTest: XCTestCase {
     }
 
     func testCanLeaveAnIPv6MulticastGroup() throws {
-        guard self.supportsIPv6 else {
+        guard System.supportsIPv6 else {
             // Skip on non-IPv6 systems
             return
         }
@@ -342,7 +333,7 @@ final class MulticastTest: XCTestCase {
 
         // Now that we've joined the group, let's send to it.
         let sender = try assertNoThrowWithValue(DatagramBootstrap(group: self.group)
-            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .bind(host: "::1", port: 0)
             .wait()
         )

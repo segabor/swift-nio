@@ -69,12 +69,10 @@ for mode in debug release; do
             fail "exited successfully but was supposed to fail"
         else
             exit_code=$?
-            # expecting illegal instruction as it should fail with a blacklisted errno
-            if [[ "$mode" == "release" ]]; then
-                assert_equal 42 $exit_code
-            else
-                assert_equal $(( 128 + 4 )) $exit_code  # 4 == SIGILL
-                grep -q blacklisted\ errno "$temp_file"
+            # expecting illegal instruction as it should fail with an unacceptable errno
+            assert_equal $(( 128 + 4 )) $exit_code  # 4 == SIGILL
+            if [[ "$mode" == "debug" ]]; then
+                grep -q unacceptable\ errno "$temp_file"
             fi
         fi
     done

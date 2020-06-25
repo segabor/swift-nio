@@ -1,3 +1,5 @@
+[![sswg:graduated|104x20](https://img.shields.io/badge/sswg-graduated-green.svg)](https://github.com/swift-server/sswg/blob/master/process/incubation.md#graduated-level)
+
 # SwiftNIO
 
 SwiftNIO is a cross-platform asynchronous event-driven network application framework
@@ -9,7 +11,7 @@ It's like [Netty](https://netty.io), but written for Swift.
 
 The SwiftNIO project is split across multiple repositories:
 
-Repository | NIO 2 (Swift 5) | NIO 1 (Swift 4+)
+Repository | NIO 2 (Swift 5+) | NIO 1 (Swift 4+)
 --- | --- | ---
 [https://github.com/apple/swift-nio][repo-nio] <br> SwiftNIO core | `from: "2.0.0"` | `from: "1.0.0"`
 [https://github.com/apple/swift-nio-ssl][repo-nio-ssl] <br> TLS (SSL) support | `from: "2.0.0"` | `from: "1.0.0"`
@@ -17,12 +19,39 @@ Repository | NIO 2 (Swift 5) | NIO 1 (Swift 4+)
 [https://github.com/apple/swift-nio-extras][repo-nio-extras] <br>useful additions around SwiftNIO | `from: "1.0.0"` | `from: "0.1.0"`
 [https://github.com/apple/swift-nio-transport-services][repo-nio-transport-services] <br> first-class support for macOS, iOS, and tvOS | `from: "1.0.0"` | `from: "0.1.0"`
 
+### Protocol Implementations
+
+Below you can find a list of a few protocol implementations that are done with SwiftNIO. This is a non-exhaustive list of protocols that are either part of the SwiftNIO project or are accepted into the [SSWG](https://swift.org/server)'s incubation process. All of the libraries listed below do all of their I/O in a non-blocking fashion using SwiftNIO.
+
+#### Low-level protocol implementations
+
+Low-level protocol implementations are often a collection of [`ChannelHandler`][ch]s that implement a protocol but still require the user to have a good understanding of SwiftNIO. Often, low-level protocol implementations will then be wrapped in high-level libraries with a nicer, more user-friendly API.
+
+Protocol | Client | Server | Repository | Module | Comment
+--- |  --- | --- | --- | --- | ---
+HTTP/1 | ✅| ✅ | [apple/swift-nio](https://github.com/apple/swift-nio) | [`NIOHTTP1`](https://apple.github.io/swift-nio/docs/current/NIOHTTP1/index.html) | official NIO project
+HTTP/2 | ✅| ✅ | [apple/swift-nio-http2](https://github.com/apple/swift-nio-http2) | [`NIOHTTP2`](https://apple.github.io/swift-nio-http2/docs/current/NIOHTTP2/index.html) | official NIO project
+WebSocket | ✅| ✅ | [apple/swift-nio](https://github.com/apple/swift-nio) | [`NIOWebSocket`](https://apple.github.io/swift-nio/docs/current/NIOWebSocket/index.html) | official NIO project
+TLS | ✅ | ✅ | [apple/swift-nio-ssl](https://github.com/apple/swift-nio-ssl) | [`NIOSSL`](https://apple.github.io/swift-nio-ssl/docs/current/NIOSSL/index.html) | official NIO project
+
+#### High-level implementations
+
+High-level implementations are usually libraries that come with an API that doesn't expose SwiftNIO's [`ChannelPipeline`][cp] and can therefore be used with very little (or no) SwiftNIO-specific knowledge. The implementations listed below do still do all of their I/O in SwiftNIO and integrate really well with the SwiftNIO ecosystem.
+
+Protocol | Client | Server | Repository | Module | Comment
+--- |  --- | --- | --- | --- | ---
+HTTP | ✅| ❌ | [swift-server/async-http-client](https://github.com/swift-server/async-http-client) | `AsyncHTTPClient` | SSWG community project
+gRPC | ✅| ✅ | [grpc/grpc-swift](https://github.com/grpc/grpc-swift) | `GRPC` | also offers a low-level API; SSWG community project
+APNS | ✅ | ❌ | [kylebrowning/APNSwift](https://github.com/kylebrowning/APNSwift) | `APNSwift` | SSWG community project
+PostgreSQL | ✅ | ❌ | [vapor/postgres-nio](https://github.com/vapor/postgres-nio) | `PostgresNIO` | SSWG community project
+Redis | ✅ | ❌ | [mordil/swift-redi-stack](https://gitlab.com/Mordil/swift-redi-stack) | `RediStack` | SSWG community project
+
 ### Supported Platforms
 
 SwiftNIO aims to support all of the platforms where Swift is supported. Currently, it is developed and tested on macOS and Linux, and is known to support the following operating system versions:
 
 * Ubuntu 14.04+
-* macOS 10.12+; (macOS 10.14+, iOS 12+, or tvOS 12+ with [swift-nio-transport-services][repo-nio-transport-services])
+* macOS 10.9+, iOS 7+; (macOS 10.14+, iOS 12+, or tvOS 12+ with [swift-nio-transport-services][repo-nio-transport-services])
 
 ### Swift versions
 
@@ -32,7 +61,7 @@ The latest released SwiftNIO 1 version supports Swift 4.0, 4.1, 4.2, and 5.0.
 
 #### SwiftNIO 2
 
-The latest released SwiftNIO 2 version supports only Swift 5.0. If you have a SwiftNIO 1 application or library that you would like to migrate to SwiftNIO 2, please check out the [migration guide](docs/migration-guide-NIO1-to-NIO2.md) we prepared for you.
+The latest released SwiftNIO 2 version supports only Swift 5.0, 5.1, and 5.2. If you have a SwiftNIO 1 application or library that you would like to migrate to SwiftNIO 2, please check out the [migration guide](docs/migration-guide-NIO1-to-NIO2.md) we prepared for you.
 
 ### Compatibility
 
@@ -161,9 +190,24 @@ There are currently several example projects that demonstrate how to use SwiftNI
 - **chat server** https://github.com/apple/swift-nio/tree/master/Sources/NIOChatServer
 - **echo client** https://github.com/apple/swift-nio/tree/master/Sources/NIOEchoClient
 - **echo server** https://github.com/apple/swift-nio/tree/master/Sources/NIOEchoServer
-- **HTTP server** https://github.com/apple/swift-nio/tree/master/Sources/NIOHTTP1Server
+- **UDP echo client** https://github.com/apple/swift-nio/tree/master/Sources/NIOUDPEchoClient
 - **UDP echo server** https://github.com/apple/swift-nio/tree/master/Sources/NIOUDPEchoServer
+- **HTTP client** https://github.com/apple/swift-nio/tree/master/Sources/NIOHTTP1Client
+- **HTTP server** https://github.com/apple/swift-nio/tree/master/Sources/NIOHTTP1Server
+- **WebSocket client** https://github.com/apple/swift-nio/tree/master/Sources/NIOWebSocketClient
 - **WebSocket server** https://github.com/apple/swift-nio/tree/master/Sources/NIOWebSocketServer
+
+To build & run them, run following command, replace TARGET_NAME with the folder name under `./Sources`
+
+```bash
+swift run TARGET_NAME
+```
+
+For example, to run NIOHTTP1Server, run following command:
+
+```bash
+swift run NIOHTTP1Server
+```
 
 ## Getting Started
 
@@ -176,6 +220,26 @@ dependencies: [
 ```
 
 and then adding the appropriate SwiftNIO module(s) to your target dependencies.
+The syntax for adding target dependencies differs slightly between Swift
+versions. For example, if you want to depend on the `NIO` and `NIOHTTP1`
+modules, specify the following dependencies:
+
+#### Swift 5.0 and 5.1 (`swift-tools-version:5.[01]`)
+
+    dependencies: ["NIO", "NIOHTTP1"]
+
+#### Swift 5.2 (`swift-tools-version:5.2`)
+
+    dependencies: [.product(name: "NIO", package: "swift-nio"),
+                   .product(name: "NIOHTTP1", package: "swift-nio")]
+
+### Using Xcode Package support
+
+If your project is set up as an Xcode project and you're using Xcode 11+, you can add SwiftNIO as a dependency to your
+Xcode project by clicking File -> Swift Packages -> Add Package Dependency. In the upcoming dialog, please enter
+`https://github.com/apple/swift-nio.git` and click Next twice. Finally, select the targets you are planning to use (for
+example `NIO`, `NIOHTTP1`, and `NIOFoundationCompat`) and click finish. Now will be able to `import NIO` (as well as all
+the other targets you have selected) in your project.
 
 To work on SwiftNIO itself, or to investigate some of the demonstration applications, you can clone the repository directly and use SwiftPM to help build it. For example, you can run the following commands to compile and run the example echo server:
 
@@ -193,16 +257,13 @@ echo "Hello SwiftNIO" | nc localhost 9999
 
 If all goes well, you'll see the message echoed back to you.
 
-To generate an Xcode project to work on SwiftNIO in Xcode:
+To work on SwiftNIO in Xcode 11+, you can just open the `Package.swift`
+file in Xcode and use Xcode's support for SwiftPM Packages.
+
+If you want to develop SwiftNIO with Xcode 10, you have to generate an Xcode project:
 
 ```bash
 swift package generate-xcodeproj
-```
-
-This generates an Xcode project using SwiftPM. You can open the project with:
-
-```bash
-open swift-nio.xcodeproj
 ```
 
 ### An alternative: using `docker-compose`
@@ -225,6 +286,10 @@ First make sure you have [Docker](https://www.docker.com/community-edition) inst
   Will create a base image, compile SwiftNIO, and run a sample `NIOHTTP1Server` on
   `localhost:8888`. Test it by `curl http://localhost:8888`
 
+- `docker-compose -f docker/docker-compose.yaml -f docker/docker-compose.1604.53.yaml run test`
+
+  Will create a base image using ubuntu 16.04 and swift 5.3, compile SwiftNIO and run the unit and integration tests.  Files exist for other ubuntu and swift versions in the docker directory.
+
 
 ## Developing SwiftNIO
 
@@ -241,11 +306,11 @@ have a few prerequisites installed on your system.
 
 #### macOS
 
-- Xcode 10.2 or newer
+- Xcode 10.2 or newer, Xcode 11 recommended.
 
 ### Linux
 
-- Swift 5.0 from [swift.org/download](https://swift.org/download/#releases).
+- Swift 5.0, 5.1, or 5.2 from [swift.org/download](https://swift.org/download/#releases). We always recommend to use the latest released version.
 - netcat (for integration tests only)
 - lsof (for integration tests only)
 - shasum (for integration tests only)

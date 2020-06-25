@@ -43,6 +43,7 @@ private class BetterHTTPParser {
     private var httpParserOffset = 0
     private var rawBytesView: UnsafeRawBufferPointer = .init(start: UnsafeRawPointer(bitPattern: 0xcafbabe), count: 0)
     private var httpErrno: http_errno? = nil
+    private var richerError: Error? = nil
     private let kind: HTTPDecoderKind
     var requestHeads = CircularBuffer<HTTPRequestHead>(initialCapacity: 1)
 
@@ -264,15 +265,8 @@ private class BetterHTTPParser {
         }
         assert(self.firstNonDiscardableOffset == nil)
         self.decodingState = .headersComplete
-        let success = self.delegate.didFinishHead(versionMajor: versionMajor,
-                                                  versionMinor: versionMinor,
-                                                  isUpgrade: isUpgrade,
-                                                  method: method,
-                                                  statusCode: statusCode,
-                                                  keepAliveState: keepAliveState)
-        guard success else {
-            return .error(HPE_INVALID_VERSION)
-        }
+
+        var skipBody = false
 
         if self.kind == .response {
             // http_parser doesn't correctly handle responses to HEAD requests. We have to do something
@@ -295,19 +289,30 @@ private class BetterHTTPParser {
             // does not meet the requirement of RFC 7230. This is an outstanding http_parser issue:
             // https://github.com/nodejs/http-parser/issues/251. As a result, we check for these status
             // codes and override http_parser's handling as well.
-            let method = self.requestHeads.removeFirst().method
-            if method == .HEAD || method == .CONNECT {
-                return .skipBody
+            guard let method = self.requestHeads.popFirst()?.method else {
+                self.richerError = NIOHTTPDecoderError.unsolicitedResponse
+                return .error(HPE_UNKNOWN)
             }
 
-            if (statusCode / 100 == 1 ||  // 1XX codes
-                statusCode == 204 ||
-                statusCode == 304) {
-                return .skipBody
+            if method == .HEAD || method == .CONNECT {
+                skipBody = true
+            } else if statusCode / 100 == 1 ||  // 1XX codes
+                statusCode == 204 || statusCode == 304 {
+                skipBody = true
             }
         }
 
-        return .normal
+        let success = self.delegate.didFinishHead(versionMajor: versionMajor,
+                                                  versionMinor: versionMinor,
+                                                  isUpgrade: isUpgrade,
+                                                  method: method,
+                                                  statusCode: statusCode,
+                                                  keepAliveState: keepAliveState)
+        guard success else {
+            return .error(HPE_INVALID_VERSION)
+        }
+
+        return skipBody ? .skipBody : .normal
     }
 
     func start() {
@@ -361,8 +366,14 @@ private class BetterHTTPParser {
             // if we chose to abort (eg. wrong HTTP version) the error will be in self.httpErrno, otherwise http_parser
             // will tell us...
             // self.parser must be non-nil here because we can't be re-entered here (ByteToMessageDecoder guarantee)
-            let err = http_errno(rawValue: self.httpErrno?.rawValue ?? parserErrno)
-            throw HTTPParserError.httpError(fromCHTTPParserErrno: err)!
+            // If we have a richer error than the errno code, and the errno is unknown, we'll use it. Otherwise, we use the
+            // error from http_parser.
+            let err = self.httpErrno ?? http_errno(rawValue: parserErrno)
+            if err == HPE_UNKNOWN, let richerError = self.richerError {
+                throw richerError
+            } else {
+                throw HTTPParserError.httpError(fromCHTTPParserErrno: err)!
+            }
         }
         if let firstNonDiscardableOffset = self.firstNonDiscardableOffset {
             self.httpParserOffset += parserConsumed - firstNonDiscardableOffset
@@ -416,7 +427,7 @@ public typealias HTTPResponseDecoder = HTTPDecoder<HTTPClientResponsePart, HTTPC
 /// that reason, applications should try to ensure that the `HTTPRequestDecoder` *later* in the
 /// `ChannelPipeline` than the `HTTPResponseEncoder`.
 ///
-/// Rather than set this up manually, consider using `ChannelPipeline.addHTTPServerHandlers`.
+/// Rather than set this up manually, consider using `ChannelPipeline.configureHTTPServerPipeline`.
 public typealias HTTPRequestDecoder = HTTPDecoder<HTTPServerRequestPart, HTTPServerResponsePart>
 
 public enum HTTPDecoderKind {
@@ -695,6 +706,9 @@ extension HTTPParserError {
             return .paused
         case HPE_UNKNOWN:
             return .unknown
+        case HPE_INVALID_TRANSFER_ENCODING:
+            // The downside of enums here, we don't have a case for this. Map it to .unknown for now.
+            return .unknown
         default:
             return nil
         }
@@ -781,5 +795,32 @@ extension HTTPMethod {
         default:
             fatalError("Unexpected http_method \(httpParserMethod)")
         }
+    }
+}
+
+
+/// Errors thrown by `HTTPRequestDecoder` and `HTTPResponseDecoder` in addition to
+/// `HTTPParserError`.
+public struct NIOHTTPDecoderError: Error {
+    private enum BaseError: Hashable {
+        case unsolicitedResponse
+    }
+
+    private let baseError: BaseError
+}
+
+
+extension NIOHTTPDecoderError {
+    /// A response was received from a server without an associated request having been sent.
+    public static let unsolicitedResponse: NIOHTTPDecoderError = .init(baseError: .unsolicitedResponse)
+}
+
+
+extension NIOHTTPDecoderError: Hashable { }
+
+
+extension NIOHTTPDecoderError: CustomDebugStringConvertible {
+    public var debugDescription: String {
+        return String(describing: self.baseError)
     }
 }

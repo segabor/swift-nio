@@ -174,6 +174,20 @@ class HTTPHeadersTest : XCTestCase {
         XCTAssertTrue(headers.contains(name: "X-Header"))
         XCTAssertFalse(headers.contains(name: "X-NonExistingHeader"))
     }
+
+    func testFirst() throws {
+        let headers = HTTPHeaders([
+            (":method", "GET"),
+            ("foo", "bar"),
+            ("foo", "baz"),
+            ("custom-key", "value-1,value-2")
+        ])
+
+        XCTAssertEqual(headers.first(name: ":method"), "GET")
+        XCTAssertEqual(headers.first(name: "Foo"), "bar")
+        XCTAssertEqual(headers.first(name: "custom-key"), "value-1,value-2")
+        XCTAssertNil(headers.first(name: "not-present"))
+    }
     
     func testKeepAliveStateStartsWithClose() {
         var headers = HTTPHeaders([("Connection", "close")])
@@ -342,5 +356,21 @@ class HTTPHeadersTest : XCTestCase {
         XCTAssertEqual(["qux", "baz"], fooBarHeaders["bar"])
         XCTAssertEqual(["bazzy"], fooBarHeaders["baz"])
         XCTAssertEqual(.unknown, fooBarHeaders.keepAliveState)
+    }
+
+    func testCapacity() {
+        // no headers
+        var headers = HTTPHeaders()
+        XCTAssertEqual(headers.capacity, 0)
+        // reserve capacity
+        headers.reserveCapacity(5)
+        XCTAssertEqual(headers.capacity, 5)
+
+        // initialize with some headers
+        headers = HTTPHeaders([("foo", "bar")])
+        XCTAssertEqual(headers.capacity, 1)
+        // reserve more capacity
+        headers.reserveCapacity(4)
+        XCTAssertEqual(headers.capacity, 4)
     }
 }

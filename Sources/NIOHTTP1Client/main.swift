@@ -26,9 +26,8 @@ private final class HTTPEchoHandler: ChannelInboundHandler {
         
         // We are connected. It's time to send the message to the server to initialize the ping-pong sequence.
         
-        var buffer = context.channel.allocator.buffer(capacity: line.utf8.count)
-        buffer.writeString(line)
-        
+        let buffer = context.channel.allocator.buffer(string: line)
+
         var headers = HTTPHeaders()
         headers.add(name: "Content-Type", value: "text/plain; charset=utf-8")
         headers.add(name: "Content-Length", value: "\(buffer.readableBytes)")
@@ -56,12 +55,9 @@ private final class HTTPEchoHandler: ChannelInboundHandler {
         switch clientResponse {
         case .head(let responseHead):
             print("Received status: \(responseHead.status)")
-        case .body(var byteBuffer):
-            if let string = byteBuffer.readString(length: byteBuffer.readableBytes) {
-                print("Received: '\(string)' back from the server.")
-            } else {
-                print("Received the line back from the server.")
-            }
+        case .body(let byteBuffer):
+            let string = String(buffer: byteBuffer)
+            print("Received: '\(string)' back from the server.")
         case .end:
             print("Closing channel.")
             context.close(promise: nil)
@@ -80,7 +76,7 @@ private final class HTTPEchoHandler: ChannelInboundHandler {
 let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 let bootstrap = ClientBootstrap(group: group)
     // Enable SO_REUSEADDR.
-    .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+    .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
     .channelInitializer { channel in
         channel.pipeline.addHTTPClientHandlers(position: .first,
                                                leftOverBytesStrategy: .fireError).flatMap {

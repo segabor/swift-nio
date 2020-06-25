@@ -24,6 +24,7 @@ import XCTest
 
 extension HTTPDecoderLengthTest {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (HTTPDecoderLengthTest) -> () throws -> Void)] {
       return [
                 ("testHTTP11SemanticEOFOnChannelInactive", testHTTP11SemanticEOFOnChannelInactive),
@@ -45,7 +46,7 @@ extension HTTPDecoderLengthTest {
                 ("testIgnoresTransferEncodingFieldOn304Responses", testIgnoresTransferEncodingFieldOn304Responses),
                 ("testIgnoresContentLengthFieldOn304Responses", testIgnoresContentLengthFieldOn304Responses),
                 ("testEarlyFinishWithoutLengthAtAllOn304Responses", testEarlyFinishWithoutLengthAtAllOn304Responses),
-                ("testMultipleTEWithChunkedLastHasNoBodyOnRequest", testMultipleTEWithChunkedLastHasNoBodyOnRequest),
+                ("testMultipleTEWithChunkedLastWorksFine", testMultipleTEWithChunkedLastWorksFine),
                 ("testMultipleTEWithChunkedFirstHasNoBodyOnRequest", testMultipleTEWithChunkedFirstHasNoBodyOnRequest),
                 ("testMultipleTEWithChunkedInTheMiddleHasNoBodyOnRequest", testMultipleTEWithChunkedInTheMiddleHasNoBodyOnRequest),
                 ("testMultipleTEWithChunkedLastHasEOFBodyOnResponseWithChannelInactive", testMultipleTEWithChunkedLastHasEOFBodyOnResponseWithChannelInactive),

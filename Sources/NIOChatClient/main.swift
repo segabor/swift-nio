@@ -44,7 +44,7 @@ private final class ChatHandler: ChannelInboundHandler {
 let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 let bootstrap = ClientBootstrap(group: group)
     // Enable SO_REUSEADDR.
-    .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+    .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
     .channelInitializer { channel in
         channel.pipeline.addHandler(ChatHandler())
     }
@@ -92,8 +92,7 @@ let channel = try { () -> Channel in
 print("ChatClient connected to ChatServer: \(channel.remoteAddress!), happy chatting\n. Press ^D to exit.")
 
 while let line = readLine(strippingNewline: false) {
-    var buffer = channel.allocator.buffer(capacity: line.utf8.count)
-    buffer.writeString(line)
+    let buffer = channel.allocator.buffer(string: line)
     try! channel.writeAndFlush(buffer).wait()
 }
 

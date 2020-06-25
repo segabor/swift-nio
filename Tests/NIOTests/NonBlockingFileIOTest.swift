@@ -14,6 +14,7 @@
 
 import XCTest
 @testable import NIO
+import NIOConcurrencyHelpers
 
 class NonBlockingFileIOTest: XCTestCase {
     private var group: EventLoopGroup!
@@ -133,16 +134,11 @@ class NonBlockingFileIOTest: XCTestCase {
         }
 
         try withPipe { readFH, writeFH in
-            do {
-                _ = try self.fileIO.read(fileHandle: readFH,
+            XCTAssertThrowsError(try self.fileIO.read(fileHandle: readFH,
                                          byteCount: 1,
                                          allocator: self.allocator,
-                                         eventLoop: self.eventLoop).wait()
-                XCTFail("should've thrown")
-            } catch let e as ChannelError {
-                XCTAssertEqual(ChannelError.ioOnClosedChannel, e)
-            } catch {
-                XCTFail("unexpected error \(error)")
+                                         eventLoop: self.eventLoop).wait()) { error in
+                XCTAssertEqual(.ioOnClosedChannel, error as? ChannelError)
             }
             return [readFH, writeFH]
         }
@@ -174,25 +170,20 @@ class NonBlockingFileIOTest: XCTestCase {
         let content = "hello"
         let contentBytes = Array(content.utf8)
         var numCalls = 0
-        withTemporaryFile(content: content) { (fileHandle, path) -> Void in
+        try withTemporaryFile(content: content) { (fileHandle, path) -> Void in
             let fr = FileRegion(fileHandle: fileHandle, readerIndex: 0, endIndex: 5)
-            do {
-                try self.fileIO.readChunked(fileRegion: fr,
-                                            chunkSize: 1,
-                                            allocator: self.allocator,
-                                            eventLoop: self.eventLoop) { buf in
-                                                var buf = buf
-                                        XCTAssertTrue(self.eventLoop.inEventLoop)
-                                        XCTAssertEqual(1, buf.readableBytes)
-                                        XCTAssertEqual(contentBytes[numCalls], buf.readBytes(length: 1)?.first!)
-                                        numCalls += 1
-                                        return self.eventLoop.makeFailedFuture(DummyError.dummy)
-                    }.wait()
-                XCTFail("call successful but should've failed")
-            } catch let e as DummyError where e == .dummy {
-                // ok
-            } catch {
-                XCTFail("wrong error \(error) caught")
+            XCTAssertThrowsError(try self.fileIO.readChunked(fileRegion: fr,
+                                                             chunkSize: 1,
+                                                             allocator: self.allocator,
+                                                             eventLoop: self.eventLoop) { buf in
+                var buf = buf
+                XCTAssertTrue(self.eventLoop.inEventLoop)
+                XCTAssertEqual(1, buf.readableBytes)
+                XCTAssertEqual(contentBytes[numCalls], buf.readBytes(length: 1)?.first!)
+                numCalls += 1
+                return self.eventLoop.makeFailedFuture(DummyError.dummy)
+            }.wait()) { error in
+                XCTAssertEqual(.dummy, error as? DummyError)
             }
         }
         XCTAssertEqual(1, numCalls)
@@ -200,45 +191,40 @@ class NonBlockingFileIOTest: XCTestCase {
 
     func testFailedIO() throws {
         enum DummyError: Error { case dummy }
-        let unconnectedSockFH = NIOFileHandle(descriptor: socket(AF_UNIX, Posix.SOCK_STREAM, 0))
+        let unconnectedSockFH = NIOFileHandle(descriptor: try! Posix.socket(domain: .unix, type: .stream, protocol: 0))
         defer {
             XCTAssertNoThrow(try unconnectedSockFH.close())
         }
-        do {
-            try self.fileIO.readChunked(fileHandle: unconnectedSockFH,
+        XCTAssertThrowsError(try self.fileIO.readChunked(fileHandle: unconnectedSockFH,
                                         byteCount: 5,
                                         chunkSize: 1,
                                         allocator: self.allocator,
                                         eventLoop: self.eventLoop) { buf in
                                             XCTFail("shouldn't have been called")
                                             return self.eventLoop.makeSucceededFuture(())
-                }.wait()
-            XCTFail("call successful but should've failed")
-        } catch let e as IOError {
+        }.wait()) { error in
             #if os(macOS) || os(iOS) || os(watchOS) || os(tvOS)
-                XCTAssertEqual(ENOTCONN, e.errnoCode)
+                XCTAssertEqual(ENOTCONN, (error as? IOError)?.errnoCode)
             #else
-                XCTAssertEqual(EINVAL, e.errnoCode)
+                XCTAssertEqual(EINVAL, (error as? IOError)?.errnoCode)
             #endif
-        } catch {
-            XCTFail("wrong error \(error) caught")
         }
     }
 
     func testChunkReadingWorksForIncrediblyLongChain() throws {
-        let content = String(repeatElement("X", count: 20*1024))
+        let content = String(repeating: "X", count: 20*1024)
         var numCalls = 0
         let expectedByte = content.utf8.first!
         try withTemporaryFile(content: content) { (fileHandle, path) -> Void in
-            let fr = FileRegion(fileHandle: fileHandle, readerIndex: 0, endIndex: content.utf8.count)
-            try self.fileIO.readChunked(fileRegion: fr,
+            try self.fileIO.readChunked(fileHandle: fileHandle,
+                                        fromOffset: 0,
+                                        byteCount: content.utf8.count,
                                         chunkSize: 1,
                                         allocator: self.allocator,
                                         eventLoop: self.eventLoop) { buf in
-                                            var buf = buf
                                             XCTAssertTrue(self.eventLoop.inEventLoop)
                                             XCTAssertEqual(1, buf.readableBytes)
-                                            XCTAssertEqual(expectedByte, buf.readBytes(length: 1)!.first!)
+                                            XCTAssertEqual(expectedByte, buf.readableBytesView.first)
                                             numCalls += 1
                                             return self.eventLoop.makeSucceededFuture(())
                 }.wait()
@@ -383,19 +369,14 @@ class NonBlockingFileIOTest: XCTestCase {
                 _ = try! Posix.write(descriptor: writeFD, pointer: "ABC", size: 3)
             }
             let fr = FileRegion(fileHandle: readFH, readerIndex: 1, endIndex: 2)
-            do {
-                try self.fileIO.readChunked(fileRegion: fr,
+            XCTAssertThrowsError(try self.fileIO.readChunked(fileRegion: fr,
                                             chunkSize: 10,
                                             allocator: self.allocator,
                                             eventLoop: self.eventLoop) { buf in
                                                 XCTFail("this shouldn't have been called")
                                                 return self.eventLoop.makeSucceededFuture(())
-                    }.wait()
-                XCTFail("succeeded and shouldn't have")
-            } catch let e as IOError where e.errnoCode == ESPIPE {
-                // OK
-            } catch {
-                XCTFail("wrong error \(error) caught")
+            }.wait()) { error in
+                XCTAssertEqual(ESPIPE, (error as? IOError)?.errnoCode)
             }
             return [readFH, writeFH]
         }
@@ -452,6 +433,45 @@ class NonBlockingFileIOTest: XCTestCase {
         XCTAssertEqual(2, numCalls)
     }
 
+    func testReadingFileSize() throws {
+        try withTemporaryFile(content: "0123456789") { (fileHandle, _) -> Void in
+            let size = try self.fileIO.readFileSize(fileHandle: fileHandle,
+                                                    eventLoop: eventLoop).wait()
+            XCTAssertEqual(size, 10)
+        }
+    }
+
+    func testChangeFileSizeShrink() throws {
+        try withTemporaryFile(content: "0123456789") { (fileHandle, _) -> Void in
+            try self.fileIO.changeFileSize(fileHandle: fileHandle,
+                                           size: 1,
+                                           eventLoop: eventLoop).wait()
+            let fileRegion = try FileRegion(fileHandle: fileHandle)
+            var buf = try self.fileIO.read(fileRegion: fileRegion,
+                                           allocator: allocator,
+                                           eventLoop: eventLoop).wait()
+            XCTAssertEqual("0", buf.readString(length: buf.readableBytes))
+        }
+    }
+
+    func testChangeFileSizeGrow() throws {
+        try withTemporaryFile(content: "0123456789") { (fileHandle, _) -> Void in
+            try self.fileIO.changeFileSize(fileHandle: fileHandle,
+                                           size: 100,
+                                           eventLoop: eventLoop).wait()
+            let fileRegion = try FileRegion(fileHandle: fileHandle)
+            var buf = try self.fileIO.read(fileRegion: fileRegion,
+                                           allocator: allocator,
+                                           eventLoop: eventLoop).wait()
+            let zeros = (1...90).map { _ in UInt8(0) }
+            guard let bytes = buf.readBytes(length: buf.readableBytes)?.suffix(from: 10) else {
+                XCTFail("readBytes(length:) should not be nil")
+                return
+            }
+            XCTAssertEqual(zeros, Array(bytes))
+        }
+    }
+
     func testWriting() throws {
         var buffer = allocator.buffer(capacity: 3)
         buffer.writeStaticString("123")
@@ -470,6 +490,78 @@ class NonBlockingFileIOTest: XCTestCase {
                                                   allocator: self.allocator,
                                                   eventLoop: self.eventLoop).wait()
             XCTAssertEqual(readBuffer.getString(at: 0, length: 3), "123")
+        }
+    }
+
+    func testWriteMultipleTimes() throws {
+        var buffer = allocator.buffer(capacity: 3)
+        buffer.writeStaticString("xxx")
+
+        try withTemporaryFile(content: "AAA") { (fileHandle, path) in
+            for i in 0 ..< 3 {
+                buffer.writeString("\(i)")
+                try self.fileIO.write(fileHandle: fileHandle,
+                                      buffer: buffer,
+                                      eventLoop: self.eventLoop).wait()
+            }
+            let offset = try fileHandle.withUnsafeFileDescriptor {
+                try Posix.lseek(descriptor: $0, offset: 0, whence: SEEK_SET)
+            }
+            XCTAssertEqual(offset, 0)
+
+            let expectedOutput = "xxx0xxx01xxx012"
+            let readBuffer = try self.fileIO.read(fileHandle: fileHandle,
+                                                  byteCount: expectedOutput.utf8.count,
+                                                  allocator: self.allocator,
+                                                  eventLoop: self.eventLoop).wait()
+            XCTAssertEqual(expectedOutput, String(decoding: readBuffer.readableBytesView, as: Unicode.UTF8.self))
+        }
+    }
+
+    func testWritingWithOffset() throws {
+        var buffer = allocator.buffer(capacity: 3)
+        buffer.writeStaticString("123")
+
+        try withTemporaryFile(content: "hello") { (fileHandle, _) -> Void in
+            try self.fileIO.write(fileHandle: fileHandle,
+                                  toOffset: 1,
+                                  buffer: buffer,
+                                  eventLoop: eventLoop).wait()
+            let offset = try fileHandle.withUnsafeFileDescriptor {
+                try Posix.lseek(descriptor: $0, offset: 0, whence: SEEK_SET)
+            }
+            XCTAssertEqual(offset, 0)
+
+            var readBuffer = try self.fileIO.read(fileHandle: fileHandle,
+                                                  byteCount: 5,
+                                                  allocator: self.allocator,
+                                                  eventLoop: self.eventLoop).wait()
+            XCTAssertEqual(5, readBuffer.readableBytes)
+            XCTAssertEqual("h123o", readBuffer.readString(length: readBuffer.readableBytes))
+        }
+    }
+
+    // This is undefined behavior and may cause different
+    // results on other platforms. Please add #if:s according
+    // to platform requirements.
+    func testWritingBeyondEOF() throws {
+        var buffer = allocator.buffer(capacity: 3)
+        buffer.writeStaticString("123")
+
+        try withTemporaryFile(content: "hello") { (fileHandle, _) -> Void in
+            try self.fileIO.write(fileHandle: fileHandle,
+                                  toOffset: 6,
+                                  buffer: buffer,
+                                  eventLoop: eventLoop).wait()
+
+            let fileRegion = try FileRegion(fileHandle: fileHandle)
+            var buf = try self.fileIO.read(fileRegion: fileRegion,
+                                           allocator: self.allocator,
+                                           eventLoop: self.eventLoop).wait()
+            XCTAssertEqual(9, buf.readableBytes)
+            XCTAssertEqual("hello", buf.readString(length: 5))
+            XCTAssertEqual([ UInt8(0) ], buf.readBytes(length: 1))
+            XCTAssertEqual("123", buf.readString(length: buf.readableBytes))
         }
     }
 
@@ -669,5 +761,157 @@ class NonBlockingFileIOTest: XCTestCase {
                     })
                 }()
             })
+    }
+
+    func testReadFromOffset() {
+        XCTAssertNoThrow(try withTemporaryFile(content: "hello world") { (fileHandle, path) in
+            let buffer = self.fileIO.read(fileHandle: fileHandle,
+                                          fromOffset: 6,
+                                          byteCount: 5,
+                                          allocator: ByteBufferAllocator(),
+                                          eventLoop: self.eventLoop)
+            XCTAssertNoThrow(try XCTAssertEqual("world",
+                                                String(decoding: buffer.wait().readableBytesView,
+                                                       as: Unicode.UTF8.self)))
+        })
+    }
+
+    func testReadChunkedFromOffset() {
+        XCTAssertNoThrow(try withTemporaryFile(content: "hello world") { (fileHandle, path) in
+            var numberOfCalls = 0
+            try self.fileIO.readChunked(fileHandle: fileHandle,
+                                        fromOffset: 6,
+                                        byteCount: 5,
+                                        chunkSize: 2,
+                                        allocator: .init(),
+                                        eventLoop: self.eventLoop) { buffer in
+                numberOfCalls += 1
+                switch numberOfCalls {
+                case 1:
+                    XCTAssertEqual("wo", String(decoding: buffer.readableBytesView, as: Unicode.UTF8.self))
+                case 2:
+                    XCTAssertEqual("rl", String(decoding: buffer.readableBytesView, as: Unicode.UTF8.self))
+                case 3:
+                    XCTAssertEqual("d", String(decoding: buffer.readableBytesView, as: Unicode.UTF8.self))
+                default:
+                    XCTFail()
+                }
+                return self.eventLoop.makeSucceededFuture(())
+            }.wait()
+        })
+    }
+
+    func testReadChunkedFromNegativeOffsetFails() {
+        XCTAssertThrowsError(try withTemporaryFile(content: "hello world") { (fileHandle, path) in
+            try self.fileIO.readChunked(fileHandle: fileHandle,
+                                        fromOffset: -1,
+                                        byteCount: 5,
+                                        chunkSize: 2,
+                                        allocator: .init(),
+                                        eventLoop: self.eventLoop) { _ in
+                XCTFail("shouldn't be called")
+                return self.eventLoop.makeSucceededFuture(())
+            }.wait()
+        }) { error in
+            XCTAssertEqual(EINVAL, (error as? IOError)?.errnoCode)
+        }
+    }
+
+    func testReadChunkedFromOffsetAfterEOFDeliversExactlyOneChunk() {
+        var numberOfCalls = 0
+        XCTAssertNoThrow(try withTemporaryFile(content: "hello world") { (fileHandle, path) in
+            try self.fileIO.readChunked(fileHandle: fileHandle,
+                                        fromOffset: 100,
+                                        byteCount: 5,
+                                        chunkSize: 2,
+                                        allocator: .init(),
+                                        eventLoop: self.eventLoop) { buffer in
+                numberOfCalls += 1
+                XCTAssertEqual(1, numberOfCalls)
+                XCTAssertEqual(0, buffer.readableBytes)
+                return self.eventLoop.makeSucceededFuture(())
+            }.wait()
+        })
+    }
+
+    func testReadChunkedFromEOFDeliversExactlyOneChunk() {
+        var numberOfCalls = 0
+        XCTAssertNoThrow(try withTemporaryFile(content: "") { (fileHandle, path) in
+            try self.fileIO.readChunked(fileHandle: fileHandle,
+                                        byteCount: 5,
+                                        chunkSize: 2,
+                                        allocator: .init(),
+                                        eventLoop: self.eventLoop) { buffer in
+                numberOfCalls += 1
+                XCTAssertEqual(1, numberOfCalls)
+                XCTAssertEqual(0, buffer.readableBytes)
+                return self.eventLoop.makeSucceededFuture(())
+            }.wait()
+        })
+    }
+
+    func testReadFromOffsetAfterEOFDeliversExactlyOneChunk() {
+        XCTAssertNoThrow(try withTemporaryFile(content: "hello world") { (fileHandle, path) in
+            XCTAssertEqual(0,
+                           try self.fileIO.read(fileHandle: fileHandle,
+                                                fromOffset: 100,
+                                                byteCount: 5,
+                                                allocator: .init(),
+                                                eventLoop: self.eventLoop).wait().readableBytes)
+        })
+    }
+
+    func testReadFromEOFDeliversExactlyOneChunk() {
+        XCTAssertNoThrow(try withTemporaryFile(content: "") { (fileHandle, path) in
+            XCTAssertEqual(0,
+                           try self.fileIO.read(fileHandle: fileHandle,
+                                                byteCount: 5,
+                                                allocator: .init(),
+                                                eventLoop: self.eventLoop).wait().readableBytes)
+        })
+    }
+
+    func testReadChunkedFromOffsetFileRegion() {
+        XCTAssertNoThrow(try withTemporaryFile(content: "hello world") { (fileHandle, path) in
+            var numberOfCalls = 0
+            let fileRegion = FileRegion(fileHandle: fileHandle, readerIndex: 6, endIndex: 11)
+            try self.fileIO.readChunked(fileRegion: fileRegion,
+                                        chunkSize: 2,
+                                        allocator: .init(),
+                                        eventLoop: self.eventLoop) { buffer in
+                numberOfCalls += 1
+                switch numberOfCalls {
+                case 1:
+                    XCTAssertEqual("wo", String(decoding: buffer.readableBytesView, as: Unicode.UTF8.self))
+                case 2:
+                    XCTAssertEqual("rl", String(decoding: buffer.readableBytesView, as: Unicode.UTF8.self))
+                case 3:
+                    XCTAssertEqual("d", String(decoding: buffer.readableBytesView, as: Unicode.UTF8.self))
+                default:
+                    XCTFail()
+                }
+                return self.eventLoop.makeSucceededFuture(())
+            }.wait()
+        })
+    }
+
+    func testReadManyChunks() {
+        let numberOfChunks = 2_000
+        XCTAssertNoThrow(try withTemporaryFile(content: String(repeating: "X",
+                                                               count: numberOfChunks)) { (fileHandle, path) in
+            let numberOfCalls = NIOAtomic<Int>.makeAtomic(value: 0)
+            XCTAssertNoThrow(try self.fileIO.readChunked(fileHandle: fileHandle,
+                                                         fromOffset: 0,
+                                                         byteCount: numberOfChunks,
+                                                         chunkSize: 1,
+                                                         allocator: self.allocator,
+                                                         eventLoop: self.eventLoop) { buffer in
+                _ = numberOfCalls.add(1)
+                XCTAssertEqual(1, buffer.readableBytes)
+                XCTAssertEqual(UInt8(ascii: "X"), buffer.readableBytesView.first)
+                return self.eventLoop.makeSucceededFuture(())
+            }.wait())
+            XCTAssertEqual(numberOfChunks, numberOfCalls.load())
+        })
     }
 }

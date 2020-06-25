@@ -92,7 +92,7 @@ public enum SocketAddress: CustomStringConvertible {
             type = "IPv4"
             var mutAddr = addr.address.sin_addr
             // this uses inet_ntop which is documented to only fail if family is not AF_INET or AF_INET6 (or ENOSPC)
-            addressString = try! descriptionForAddress(family: AF_INET, bytes: &mutAddr, length: Int(INET_ADDRSTRLEN))
+            addressString = try! descriptionForAddress(family: .inet, bytes: &mutAddr, length: Int(INET_ADDRSTRLEN))
 
             port = "\(self.port!)"
         case .v6(let addr):
@@ -100,8 +100,8 @@ public enum SocketAddress: CustomStringConvertible {
             type = "IPv6"
             var mutAddr = addr.address.sin6_addr
             // this uses inet_ntop which is documented to only fail if family is not AF_INET or AF_INET6 (or ENOSPC)
-            addressString = try! descriptionForAddress(family: AF_INET6, bytes: &mutAddr, length: Int(INET6_ADDRSTRLEN))
-    
+            addressString = try! descriptionForAddress(family: .inet6, bytes: &mutAddr, length: Int(INET6_ADDRSTRLEN))
+
             port = "\(self.port!)"
         case .unixDomainSocket(let addr):
             var address = addr.address
@@ -114,33 +114,73 @@ public enum SocketAddress: CustomStringConvertible {
             }
             return "[\(type)]\(port)"
         }
-        
+
         return "[\(type)]\(host.map { "\($0)/\(addressString):" } ?? "\(addressString):")\(port)"
     }
 
-    /// Returns the protocol family as defined in `man 2 socket` of this `SocketAddress`.
+    @available(*, deprecated, renamed: "SocketAddress.protocol")
     public var protocolFamily: Int32 {
+      return Int32(self.protocol.rawValue)
+    }
+
+    /// Returns the protocol family as defined in `man 2 socket` of this `SocketAddress`.
+    public var `protocol`: NIOBSDSocket.ProtocolFamily {
         switch self {
         case .v4:
-            return PF_INET
+            return .inet
         case .v6:
-            return PF_INET6
+            return .inet6
         case .unixDomainSocket:
-            return PF_UNIX
+            return .unix
         }
     }
 
-    /// Get the port associated with the address, if defined.
-    public var port: Int? {
+    /// Get the IP address as a string
+    public var ipAddress: String? {
         switch self {
         case .v4(let addr):
-            // looks odd but we need to first convert the endianness as `in_port_t` and then make the result an `Int`.
-            return Int(in_port_t(bigEndian: addr.address.sin_port))
+            var mutAddr = addr.address.sin_addr
+            // this uses inet_ntop which is documented to only fail if family is not AF_INET or AF_INET6 (or ENOSPC)
+            return try! descriptionForAddress(family: .inet, bytes: &mutAddr, length: Int(INET_ADDRSTRLEN))
         case .v6(let addr):
-            // looks odd but we need to first convert the endianness as `in_port_t` and then make the result an `Int`.
-            return Int(in_port_t(bigEndian: addr.address.sin6_port))
-        case .unixDomainSocket:
+            var mutAddr = addr.address.sin6_addr
+            // this uses inet_ntop which is documented to only fail if family is not AF_INET or AF_INET6 (or ENOSPC)
+            return try! descriptionForAddress(family: .inet6, bytes: &mutAddr, length: Int(INET6_ADDRSTRLEN))
+        case .unixDomainSocket(_):
             return nil
+        }
+    }
+
+    /// Get and set the port associated with the address, if defined.
+    /// When setting to `nil` the port will default to `0` for compatible sockets. The rationale for this is that both `nil` and `0` can
+    /// be interpreted as "no preference".
+    /// Setting a non-nil value for a unix domain socket is invalid and will result in a fatal error.
+    public var port: Int? {
+        get {
+            switch self {
+            case .v4(let addr):
+                // looks odd but we need to first convert the endianness as `in_port_t` and then make the result an `Int`.
+                return Int(in_port_t(bigEndian: addr.address.sin_port))
+            case .v6(let addr):
+                // looks odd but we need to first convert the endianness as `in_port_t` and then make the result an `Int`.
+                return Int(in_port_t(bigEndian: addr.address.sin6_port))
+            case .unixDomainSocket:
+                return nil
+            }
+        }
+        set {
+            switch self {
+            case .v4(let addr):
+                var mutAddr = addr.address
+                mutAddr.sin_port = in_port_t(newValue ?? 0).bigEndian
+                self = .v4(.init(address: mutAddr, host: addr.host))
+            case .v6(let addr):
+                var mutAddr = addr.address
+                mutAddr.sin6_port = in_port_t(newValue ?? 0).bigEndian
+                self = .v6(.init(address: mutAddr, host: addr.host))
+            case .unixDomainSocket:
+                precondition(newValue == nil, "attempting to set a non-nil value to a unix socket is not valid")
+            }
         }
     }
 
@@ -150,13 +190,13 @@ public enum SocketAddress: CustomStringConvertible {
         switch self {
         case .v4(let addr):
             var address = addr.address
-            return try address.withSockAddr(body)
+            return try address.withSockAddr({ try body($0, $1) })
         case .v6(let addr):
             var address = addr.address
-            return try address.withSockAddr(body)
+            return try address.withSockAddr({ try body($0, $1) })
         case .unixDomainSocket(let addr):
             var address = addr.address
-            return try address.withSockAddr(body)
+            return try address.withSockAddr({ try body($0, $1) })
         }
     }
 
@@ -204,7 +244,7 @@ public enum SocketAddress: CustomStringConvertible {
 #endif
 
         var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
+        addr.sun_family = sa_family_t(NIOBSDSocket.AddressFamily.unix.rawValue)
         pathBytes.withUnsafeBufferPointer { srcPtr in
             withUnsafeMutablePointer(to: &addr.sun_path) { dstPtr in
                 dstPtr.withMemoryRebound(to: UInt8.self, capacity: pathBytes.count) { dstPtr in
@@ -228,15 +268,15 @@ public enum SocketAddress: CustomStringConvertible {
         var ipv6Addr = in6_addr()
 
         self = try ipAddress.withCString {
-            if inet_pton(AF_INET, $0, &ipv4Addr) == 1 {
+            if inet_pton(NIOBSDSocket.AddressFamily.inet.rawValue, $0, &ipv4Addr) == 1 {
                 var addr = sockaddr_in()
-                addr.sin_family = sa_family_t(AF_INET)
+                addr.sin_family = sa_family_t(NIOBSDSocket.AddressFamily.inet.rawValue)
                 addr.sin_port = in_port_t(port).bigEndian
                 addr.sin_addr = ipv4Addr
                 return .v4(.init(address: addr, host: ""))
-            } else if inet_pton(AF_INET6, $0, &ipv6Addr) == 1 {
+            } else if inet_pton(NIOBSDSocket.AddressFamily.inet6.rawValue, $0, &ipv6Addr) == 1 {
                 var addr = sockaddr_in6()
-                addr.sin6_family = sa_family_t(AF_INET6)
+                addr.sin6_family = sa_family_t(NIOBSDSocket.AddressFamily.inet6.rawValue)
                 addr.sin6_port = in_port_t(port).bigEndian
                 addr.sin6_flowinfo = 0
                 addr.sin6_addr = ipv6Addr
@@ -270,12 +310,12 @@ public enum SocketAddress: CustomStringConvertible {
         }
 
         if let info = info {
-            switch info.pointee.ai_family {
-            case AF_INET:
+            switch NIOBSDSocket.AddressFamily(rawValue: info.pointee.ai_family) {
+            case .inet:
                 return info.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { ptr in
                     .v4(.init(address: ptr.pointee, host: host))
                 }
-            case AF_INET6:
+            case .inet6:
                 return info.pointee.ai_addr.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { ptr in
                     .v6(.init(address: ptr.pointee, host: host))
                 }
@@ -314,11 +354,58 @@ extension SocketAddress: Equatable {
                 return false
             }
 
-            var sunpath1 = addr1.address.sun_path
-            var sunpath2 = addr2.address.sun_path
-            return memcmp(&sunpath1, &sunpath2, MemoryLayout.size(ofValue: sunpath1)) == 0
+            let bufferSize = MemoryLayout.size(ofValue: addr1.address.sun_path)
+
+            // These uses of withMemoryRebound(to:) are fine: the `strncmp` call cannot possibly re-enter Swift code, and so we cannot possibly violate
+            // Swift's strict aliasing rules by way of this type-pun.
+            return withUnsafePointer(to: addr1.address.sun_path) { sunpath1 in
+                return withUnsafePointer(to: addr2.address.sun_path) { sunpath2 in
+                    return sunpath1.withMemoryRebound(to: Int8.self, capacity: bufferSize) { sunpath1 in
+                        return sunpath2.withMemoryRebound(to: Int8.self, capacity: bufferSize) { sunpath2 in
+                            return strncmp(sunpath1, sunpath2, MemoryLayout.size(ofValue: bufferSize)) == 0
+                        }
+                    }
+                }
+            }
         case (.v4, _), (.v6, _), (.unixDomainSocket, _):
             return false
+        }
+    }
+}
+
+/// We define an extension on `SocketAddress` that gives it an elementwise hashable conformance, using
+/// only the elements defined on the structure in their man pages (excluding lengths).
+extension SocketAddress: Hashable {
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .unixDomainSocket(let uds):
+            hasher.combine(0)
+            hasher.combine(uds.address.sun_family)
+
+            let pathSize = MemoryLayout.size(ofValue: uds.address.sun_path)
+            withUnsafePointer(to: uds.address.sun_path) { pathPtr in
+                // This `withMemoryRebound` is safe: we cannot violate Swift's pointer aliasing rules as this call cannot make
+                // it back into Swift code.
+                let length = pathPtr.withMemoryRebound(to: Int8.self, capacity: pathSize) {
+                    strnlen($0, pathSize)
+                }
+                let bytes = UnsafeRawBufferPointer(start: UnsafeRawPointer(pathPtr), count: length)
+                hasher.combine(bytes: bytes)
+            }
+        case .v4(let v4Addr):
+            hasher.combine(1)
+            hasher.combine(v4Addr.address.sin_family)
+            hasher.combine(v4Addr.address.sin_port)
+            hasher.combine(v4Addr.address.sin_addr.s_addr)
+        case .v6(let v6Addr):
+            hasher.combine(2)
+            hasher.combine(v6Addr.address.sin6_family)
+            hasher.combine(v6Addr.address.sin6_port)
+            hasher.combine(v6Addr.address.sin6_flowinfo)
+            hasher.combine(v6Addr.address.sin6_scope_id)
+            withUnsafeBytes(of: v6Addr.address.sin6_addr) {
+                hasher.combine(bytes: $0)
+            }
         }
     }
 }

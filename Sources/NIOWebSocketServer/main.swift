@@ -46,13 +46,11 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
 
     private var responseBody: ByteBuffer!
 
-    func channelRegistered(context: ChannelHandlerContext) {
-        var buffer = context.channel.allocator.buffer(capacity: websocketResponse.utf8.count)
-        buffer.writeString(websocketResponse)
-        self.responseBody = buffer
+    func handlerAdded(context: ChannelHandlerContext) {
+        self.responseBody = context.channel.allocator.buffer(string: websocketResponse)
     }
 
-    func channelUnregistered(context: ChannelHandlerContext) {
+    func handlerRemoved(context: ChannelHandlerContext) {
         self.responseBody = nil
     }
 
@@ -167,7 +165,7 @@ private final class WebSocketTimeHandler: ChannelInboundHandler {
             // then, when we've sent it, close up shop. We should send back the close code the remote
             // peer sent us, unless they didn't send one at all.
             var data = frame.unmaskedData
-            let closeDataCode = data.readSlice(length: 2) ?? context.channel.allocator.buffer(capacity: 0)
+            let closeDataCode = data.readSlice(length: 2) ?? ByteBuffer()
             let closeFrame = WebSocketFrame(fin: true, opcode: .connectionClose, data: closeDataCode)
             _ = context.write(self.wrapOutboundOut(closeFrame)).map { () in
                 context.close(promise: nil)
@@ -210,7 +208,7 @@ let upgrader = NIOWebSocketServerUpgrader(shouldUpgrade: { (channel: Channel, he
 let bootstrap = ServerBootstrap(group: group)
     // Specify backlog and enable SO_REUSEADDR for the server itself
     .serverChannelOption(ChannelOptions.backlog, value: 256)
-    .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+    .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
     // Set the handlers that are applied to the accepted Channels
     .childChannelInitializer { channel in
@@ -227,7 +225,7 @@ let bootstrap = ServerBootstrap(group: group)
     }
 
     // Enable SO_REUSEADDR for the accepted Channels
-    .childChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+    .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
 defer {
     try! group.syncShutdownGracefully()

@@ -48,7 +48,10 @@ public final class AcceptBackoffHandlerTest: XCTestCase {
         }
 
         let readCountHandler = ReadCountHandler()
-        let serverChannel = try setupChannel(group: group, readCountHandler: readCountHandler, errors: [error])
+        let serverChannel = try setupChannel(group: group,
+                                             readCountHandler: readCountHandler,
+                                             backoffProvider: { _ in return .milliseconds(100) },
+                                             errors: [error])
         XCTAssertEqual(0, try serverChannel.eventLoop.submit {
             serverChannel.readable()
             serverChannel.read()
@@ -56,7 +59,7 @@ public final class AcceptBackoffHandlerTest: XCTestCase {
             }.wait())
 
         // Inspect the read count after our scheduled backoff elapsed.
-        XCTAssertEqual(1, try serverChannel.eventLoop.scheduleTask(in: .seconds(1)) {
+        XCTAssertEqual(1, try serverChannel.eventLoop.scheduleTask(in: .milliseconds(100)) {
             return readCountHandler.readCount
         }.futureResult.wait())
 
@@ -119,7 +122,7 @@ public final class AcceptBackoffHandlerTest: XCTestCase {
 
         let readCountHandler = ReadCountHandler()
         let serverChannel = try setupChannel(group: group, readCountHandler: readCountHandler, backoffProvider: { err in
-            return .milliseconds(100)
+            return .milliseconds(10)
         }, errors: [ENFILE])
         XCTAssertEqual(0, try serverChannel.eventLoop.submit {
             serverChannel.readable()
@@ -170,7 +173,7 @@ public final class AcceptBackoffHandlerTest: XCTestCase {
 
         let readCountHandler = ReadCountHandler()
         let serverChannel = try setupChannel(group: group, readCountHandler: readCountHandler, backoffProvider: { err in
-            return .milliseconds(100)
+            return .milliseconds(10)
         }, errors: [ENFILE])
 
         let inactiveVerificationHandler = InactiveVerificationHandler(promise: serverChannel.eventLoop.makePromise())
@@ -200,7 +203,7 @@ public final class AcceptBackoffHandlerTest: XCTestCase {
 
         let readCountHandler = ReadCountHandler()
 
-        let backoffProviderCalled = Atomic<Int>(value: 0)
+        let backoffProviderCalled = NIOAtomic<Int>.makeAtomic(value: 0)
         let serverChannel = try setupChannel(group: group, readCountHandler: readCountHandler, backoffProvider: { err in
             if backoffProviderCalled.add(1) == 0 {
                 return .seconds(1)
@@ -245,7 +248,10 @@ public final class AcceptBackoffHandlerTest: XCTestCase {
         }
     }
 
-    private func setupChannel(group: EventLoopGroup, readCountHandler: ReadCountHandler, backoffProvider: @escaping (IOError) -> TimeAmount? = AcceptBackoffHandler.defaultBackoffProvider, errors: [Int32]) throws -> ServerSocketChannel {
+    private func setupChannel(group: EventLoopGroup,
+                              readCountHandler: ReadCountHandler,
+                              backoffProvider: @escaping (IOError) -> TimeAmount? = AcceptBackoffHandler.defaultBackoffProvider,
+                              errors: [Int32]) throws -> ServerSocketChannel {
         let eventLoop = group.next() as! SelectableEventLoop
         let socket = try NonAcceptingServerSocket(errors: errors)
         let serverChannel = try assertNoThrowWithValue(ServerSocketChannel(serverSocket: socket,
@@ -258,7 +264,7 @@ public final class AcceptBackoffHandlerTest: XCTestCase {
                                               name: self.acceptHandlerName)
         }.wait())
 
-        XCTAssertNoThrow(try eventLoop.submit {
+        XCTAssertNoThrow(try eventLoop.flatSubmit {
             // this is pretty delicate at the moment:
             // `bind` must be _synchronously_ follow `register`, otherwise in our current implementation, `epoll` will
             // send us `EPOLLHUP`. To have it run synchronously, we need to invoke the `flatMap` on the eventloop that the
@@ -266,7 +272,7 @@ public final class AcceptBackoffHandlerTest: XCTestCase {
             serverChannel.register().flatMap { () -> EventLoopFuture<()> in
                 return serverChannel.bind(to: try! SocketAddress(ipAddress: "127.0.0.1", port: 0))
             }
-        }.wait().wait() as Void)
+        }.wait() as Void)
         return serverChannel
     }
 }

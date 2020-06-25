@@ -18,7 +18,7 @@ here="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 function replace_acceptable_years() {
     # this needs to replace all acceptable forms with 'YEARS'
-    sed -e 's/2017-201[89]/YEARS/' -e 's/2019/YEARS/'
+    sed -e 's/20[12][78901]-20[12][8901]/YEARS/' -e 's/20[12][8901]/YEARS/'
 }
 
 printf "=> Checking linux tests... "
@@ -33,10 +33,25 @@ else
   printf "\033[0;32mokay.\033[0m\n"
 fi
 
+printf "=> Checking for unacceptable language... "
+# This greps for unacceptable terminology. The square bracket[s] are so that
+# "git grep" doesn't find the lines that greps :).
+unacceptable_terms=(
+    -e blacklis[t]
+    -e whitelis[t]
+    -e slav[e]
+)
+if git grep --color=never -i "${unacceptable_terms[@]}" > /dev/null; then
+    printf "\033[0;31mUnacceptable language found.\033[0m\n"
+    git grep -i "${unacceptable_terms[@]}"
+    exit 1
+fi
+printf "\033[0;32mokay.\033[0m\n"
+
 printf "=> Checking license headers... "
 tmp=$(mktemp /tmp/.swift-nio-sanity_XXXXXX)
 
-for language in swift-or-c bash dtrace; do
+for language in swift-or-c bash dtrace python; do
   declare -a matching_files
   declare -a exceptions
   expections=( )
@@ -65,6 +80,25 @@ EOF
         matching_files=( -name '*.sh' )
         cat > "$tmp" <<"EOF"
 #!/bin/bash
+##===----------------------------------------------------------------------===##
+##
+## This source file is part of the SwiftNIO open source project
+##
+## Copyright (c) YEARS Apple Inc. and the SwiftNIO project authors
+## Licensed under Apache License v2.0
+##
+## See LICENSE.txt for license information
+## See CONTRIBUTORS.txt for the list of SwiftNIO project authors
+##
+## SPDX-License-Identifier: Apache-2.0
+##
+##===----------------------------------------------------------------------===##
+EOF
+      ;;
+      python)
+        matching_files=( -name '*.py' )
+        cat > "$tmp" <<"EOF"
+#!/usr/bin/env python
 ##===----------------------------------------------------------------------===##
 ##
 ## This source file is part of the SwiftNIO open source project

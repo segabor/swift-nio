@@ -34,7 +34,7 @@ class FileRegionTest : XCTestCase {
         let countingHandler = ByteCountingHandler(numBytes: bytes.count, promise: group.next().makePromise())
 
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { $0.pipeline.addHandler(countingHandler) }
             .bind(host: "127.0.0.1", port: 0)
             .wait())
@@ -74,7 +74,7 @@ class FileRegionTest : XCTestCase {
         let countingHandler = ByteCountingHandler(numBytes: 0, promise: group.next().makePromise())
 
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { $0.pipeline.addHandler(countingHandler) }
             .bind(host: "127.0.0.1", port: 0)
             .wait())
@@ -125,7 +125,7 @@ class FileRegionTest : XCTestCase {
         let countingHandler = ByteCountingHandler(numBytes: bytes.count, promise: group.next().makePromise())
 
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { $0.pipeline.addHandler(countingHandler) }
             .bind(host: "127.0.0.1", port: 0)
             .wait())
@@ -152,21 +152,16 @@ class FileRegionTest : XCTestCase {
                 XCTAssertNoThrow(try fh2.close())
             }
             try content.write(toFile: filePath, atomically: false, encoding: .ascii)
-            do {
-                () = try clientChannel.writeAndFlush(NIOAny(fr1)).flatMap {
-                    let frFuture = clientChannel.write(NIOAny(fr2))
-                    var buffer = clientChannel.allocator.buffer(capacity: bytes.count)
-                    buffer.writeBytes(bytes)
-                    let bbFuture = clientChannel.write(NIOAny(buffer))
-                    clientChannel.close(promise: nil)
-                    clientChannel.flush()
-                    return frFuture.flatMap { bbFuture }
-                }.wait()
-                XCTFail("no error happened even though we closed before flush")
-            } catch let e as ChannelError {
-                XCTAssertEqual(ChannelError.ioOnClosedChannel, e)
-            } catch let e {
-                XCTFail("unexpected error \(e)")
+            XCTAssertThrowsError(try clientChannel.writeAndFlush(NIOAny(fr1)).flatMap { () -> EventLoopFuture<Void> in
+                let frFuture = clientChannel.write(NIOAny(fr2))
+                var buffer = clientChannel.allocator.buffer(capacity: bytes.count)
+                buffer.writeBytes(bytes)
+                let bbFuture = clientChannel.write(NIOAny(buffer))
+                clientChannel.close(promise: nil)
+                clientChannel.flush()
+                return frFuture.flatMap { bbFuture }
+            }.wait()) { error in
+                XCTAssertEqual(.ioOnClosedChannel, error as? ChannelError)
             }
 
             var buffer = clientChannel.allocator.buffer(capacity: bytes.count)
@@ -203,7 +198,6 @@ class FileRegionTest : XCTestCase {
 
     func testFileRegionDuplicatesShareSeekPointer() throws {
         try withTemporaryFile(content: "0123456789") { fh1, path in
-            let fr1 = FileRegion(fileHandle: fh1, readerIndex: 0, endIndex: 10)
             let fh2 = try fh1.duplicate()
 
             var fr1Bytes: [UInt8] = Array(repeating: 0, count: 5)

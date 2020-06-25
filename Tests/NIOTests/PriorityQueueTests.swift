@@ -78,7 +78,7 @@ class PriorityQueueTest: XCTestCase {
 
     func testBuildAndRemoveFromRandomPriorityQueues() {
         for ascending in [true, false] {
-            for size in 0...50 {
+            for size in 0...33 {
                 var pq = PriorityQueue<UInt8>(ascending: ascending)
                 let randoms = getRandomNumbers(count: size)
                 randoms.forEach { pq.push($0) }
@@ -139,6 +139,16 @@ class PriorityQueueTest: XCTestCase {
         }
         XCTAssertEqual(clearlyTheLargest, pq.pop()!)
         XCTAssert(pq.isEmpty)
+    }
+    
+    func testDescription() {
+        let pq1 = PriorityQueue<Int>()
+        var pq2 = PriorityQueue<Int>()
+        pq2.push(1)
+        pq2.push(2)
+        pq2.push(3)
+        XCTAssertEqual(pq1.description, "PriorityQueue(count: 0): \(Array(pq1))")
+        XCTAssertEqual(pq2.description, "PriorityQueue(count: 3): \(Array(pq2))")
     }
 }
 

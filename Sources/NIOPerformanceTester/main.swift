@@ -15,7 +15,6 @@
 import NIO
 import NIOHTTP1
 import NIOFoundationCompat
-import Foundation
 import Dispatch
 
 // MARK: Test Harness
@@ -29,12 +28,12 @@ assert({
     return true
     }())
 
-public func measure(_ fn: () throws -> Int) rethrows -> [TimeInterval] {
-    func measureOne(_ fn: () throws -> Int) rethrows -> TimeInterval {
-        let start = Date()
+public func measure(_ fn: () throws -> Int) rethrows -> [Double] {
+    func measureOne(_ fn: () throws -> Int) rethrows -> Double {
+        let start = DispatchTime.now().uptimeNanoseconds
         _ = try fn()
-        let end = Date()
-        return end.timeIntervalSince(start)
+        let end = DispatchTime.now().uptimeNanoseconds
+        return Double(end - start) / Double(TimeAmount.seconds(1).nanoseconds)
     }
 
     _ = try measureOne(fn) /* pre-heat and throw away */
@@ -49,10 +48,10 @@ public func measure(_ fn: () throws -> Int) rethrows -> [TimeInterval] {
 let limitSet = CommandLine.arguments.dropFirst()
 
 public func measureAndPrint(desc: String, fn: () throws -> Int) rethrows -> Void {
-    if limitSet.count == 0 || limitSet.contains(desc) {
+    if limitSet.isEmpty || limitSet.contains(desc) {
         print("measuring\(warning): \(desc): ", terminator: "")
         let measurements = try measure(fn)
-        print(measurements.reduce("") { $0 + "\($1), " })
+        print(measurements.reduce(into: "") { $0.append("\($1), ") })
     } else {
         print("skipping '\(desc)', limit set = \(limitSet)")
     }
@@ -123,7 +122,7 @@ defer {
 }
 
 let serverChannel = try ServerBootstrap(group: group)
-    .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+    .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
     .childChannelInitializer { channel in
         channel.pipeline.configureHTTPServerPipeline(withPipeliningAssistance: true).flatMap {
             channel.pipeline.addHandler(SimpleHTTPServer())
@@ -291,7 +290,6 @@ measureAndPrint(desc: "bytebuffer_lots_of_rw") {
         DispatchData(bytes: UnsafeRawBufferPointer(start: UnsafeRawPointer(ptr.baseAddress), count: ptr.count))
     }
     var buffer = ByteBufferAllocator().buffer(capacity: 7 * 1024 * 1024)
-    let foundationData = "A".data(using: .utf8)!
     @inline(never)
     func doWrites(buffer: inout ByteBuffer) {
         /* all of those should be 0 allocations */
@@ -700,4 +698,72 @@ measureAndPrint(desc: "future_whenallcomplete_100k_deferred_on_loop") {
     return allSucceeded.count
 }
 
-try measureAndPrint(desc: "channel_pipeline_1m_events", benchmark: ChannelPipelineBenchmark.self)
+measureAndPrint(desc: "future_reduce_10k_futures") {
+    let el1 = group.next()
+
+    let oneHundredFutures = (1 ... 10_000).map { i in el1.makeSucceededFuture(i) }
+    return try! EventLoopFuture<Int>.reduce(0, oneHundredFutures, on: el1, +).wait()
+}
+
+measureAndPrint(desc: "future_reduce_into_10k_futures") {
+    let el1 = group.next()
+
+    let oneHundredFutures = (1 ... 10_000).map { i in el1.makeSucceededFuture(i) }
+    return try! EventLoopFuture<Int>.reduce(into: 0, oneHundredFutures, on: el1, { $0 += $1 }).wait()
+}
+
+try measureAndPrint(desc: "channel_pipeline_1m_events", benchmark: ChannelPipelineBenchmark())
+
+try measureAndPrint(desc: "websocket_encode_50b_space_at_front_1m_frames_cow",
+                    benchmark: WebSocketFrameEncoderBenchmark(dataSize: 50, runCount: 1_000_000, dataStrategy: .spaceAtFront, cowStrategy: .always, maskingKeyStrategy: .never))
+
+try measureAndPrint(desc: "websocket_encode_50b_space_at_front_1m_frames_cow_masking",
+                    benchmark: WebSocketFrameEncoderBenchmark(dataSize: 50, runCount: 100_000, dataStrategy: .spaceAtFront, cowStrategy: .always, maskingKeyStrategy: .always))
+
+try measureAndPrint(desc: "websocket_encode_1kb_space_at_front_100k_frames_cow",
+                    benchmark: WebSocketFrameEncoderBenchmark(dataSize: 1024, runCount: 100_000, dataStrategy: .spaceAtFront, cowStrategy: .always, maskingKeyStrategy: .never))
+
+try measureAndPrint(desc: "websocket_encode_50b_no_space_at_front_1m_frames_cow",
+                    benchmark: WebSocketFrameEncoderBenchmark(dataSize: 50, runCount: 1_000_000, dataStrategy: .noSpaceAtFront, cowStrategy: .always, maskingKeyStrategy: .never))
+
+try measureAndPrint(desc: "websocket_encode_1kb_no_space_at_front_100k_frames_cow",
+                    benchmark: WebSocketFrameEncoderBenchmark(dataSize: 1024, runCount: 100_000, dataStrategy: .noSpaceAtFront, cowStrategy: .always, maskingKeyStrategy: .never))
+
+try measureAndPrint(desc: "websocket_encode_50b_space_at_front_10k_frames",
+                    benchmark: WebSocketFrameEncoderBenchmark(dataSize: 50, runCount: 10_000, dataStrategy: .spaceAtFront, cowStrategy: .never, maskingKeyStrategy: .never))
+
+try measureAndPrint(desc: "websocket_encode_50b_space_at_front_10k_frames_masking",
+                    benchmark: WebSocketFrameEncoderBenchmark(dataSize: 50, runCount: 100_000, dataStrategy: .spaceAtFront, cowStrategy: .never, maskingKeyStrategy: .always))
+
+try measureAndPrint(desc: "websocket_encode_1kb_space_at_front_1k_frames",
+                    benchmark: WebSocketFrameEncoderBenchmark(dataSize: 1024, runCount: 1_000, dataStrategy: .spaceAtFront, cowStrategy: .never, maskingKeyStrategy: .never))
+
+try measureAndPrint(desc: "websocket_encode_50b_no_space_at_front_10k_frames",
+                    benchmark: WebSocketFrameEncoderBenchmark(dataSize: 50, runCount: 10_000, dataStrategy: .noSpaceAtFront, cowStrategy: .never, maskingKeyStrategy: .never))
+
+try measureAndPrint(desc: "websocket_encode_1kb_no_space_at_front_1k_frames",
+                    benchmark: WebSocketFrameEncoderBenchmark(dataSize: 1024, runCount: 1_000, dataStrategy: .noSpaceAtFront, cowStrategy: .never, maskingKeyStrategy: .never))
+
+ try measureAndPrint(desc: "websocket_decode_125b_100k_frames",
+                     benchmark: WebSocketFrameDecoderBenchmark(dataSize: 125, runCount: 100_000))
+
+try measureAndPrint(desc: "websocket_decode_125b_with_а_masking_key_100k_frames",
+                    benchmark: WebSocketFrameDecoderBenchmark(dataSize: 125, runCount: 100_000, maskingKey: [0x80, 0x08, 0x10, 0x01]))
+
+try measureAndPrint(desc: "websocket_decode_64kb_100k_frames",
+                    benchmark: WebSocketFrameDecoderBenchmark(dataSize: Int(UInt16.max), runCount: 100_000))
+
+try measureAndPrint(desc: "websocket_decode_64kb_with_а_masking_key_100k_frames",
+                    benchmark: WebSocketFrameDecoderBenchmark(dataSize: Int(UInt16.max), runCount: 100_000, maskingKey: [0x80, 0x08, 0x10, 0x01]))
+
+try measureAndPrint(desc: "websocket_decode_64kb_+1_100k_frames",
+                    benchmark: WebSocketFrameDecoderBenchmark(dataSize: Int(UInt16.max) + 1, runCount: 100_000))
+
+try measureAndPrint(desc: "websocket_decode_64kb_+1_with_а_masking_key_100k_frames",
+                    benchmark: WebSocketFrameDecoderBenchmark(dataSize: Int(UInt16.max) + 1, runCount: 100_000, maskingKey: [0x80, 0x08, 0x10, 0x01]))
+
+try measureAndPrint(desc: "circular_buffer_into_byte_buffer_1kb", benchmark: CircularBufferIntoByteBufferBenchmark(iterations: 10000, bufferSize: 1024))
+
+try measureAndPrint(desc: "circular_buffer_into_byte_buffer_1mb", benchmark: CircularBufferIntoByteBufferBenchmark(iterations: 20, bufferSize: 1024*1024))
+
+try measureAndPrint(desc: "byte_buffer_view_iterator_1mb", benchmark: ByteBufferViewIteratorBenchmark(iterations: 20, bufferSize: 1024*1024))

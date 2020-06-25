@@ -55,6 +55,11 @@ private final class PingHandler: ChannelInboundHandler {
         self.allDone = eventLoop.makePromise()
     }
 
+    public func handlerAdded(context: ChannelHandlerContext) {
+        (context.channel as? SocketOptionProvider)?.setSoLinger(linger(l_onoff: 1, l_linger: 0))
+            .whenFailure({ error in fatalError("Failed to set linger \(error)") })
+    }
+
     public func channelActive(context: ChannelHandlerContext) {
         self.pingBuffer = context.channel.allocator.buffer(capacity: 1)
         self.pingBuffer.writeInteger(PingHandler.pingCode)
@@ -111,7 +116,7 @@ private final class PongHandler: ChannelInboundHandler {
 
 func doPingPongRequests(group: EventLoopGroup, number numberOfRequests: Int) throws -> Int {
     let serverChannel = try ServerBootstrap(group: group)
-        .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+        .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
         .childChannelOption(ChannelOptions.recvAllocator, value: FixedSizeRecvByteBufferAllocator(capacity: 4))
         .childChannelInitializer { channel in
             channel.pipeline.addHandler(ByteToMessageHandler(PongDecoder())).flatMap {

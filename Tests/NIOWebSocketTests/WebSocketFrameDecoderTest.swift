@@ -25,6 +25,7 @@ private class CloseSwallower: ChannelOutboundHandler, RemovableChannelHandler {
 
     public func allowClose() {
         self.context!.close(promise: self.closePromise)
+        self.context = nil
     }
 
     func close(context: ChannelHandlerContext, mode: CloseMode, promise: EventLoopPromise<Void>?) {
@@ -83,12 +84,12 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
             while let d = try self.encoderChannel.readOutbound(as: ByteBuffer.self) {
                 XCTAssertNoThrow(try self.decoderChannel.writeInbound(d))
             }
-            
+
             guard let producedFrame: WebSocketFrame = try self.decoderChannel.readInbound() else {
                 XCTFail("Did not produce a frame")
                 return nil
             }
-            
+
             // Should only have gotten one frame!
             XCTAssertNoThrow(XCTAssertNil(try self.decoderChannel.readInbound(as: WebSocketFrame.self)))
             return producedFrame
@@ -246,13 +247,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // larger than the frame max.
         self.buffer.writeBytes([0x81, 0xFE, 0x40, 0x01])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.invalidFrameLength {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.invalidFrameLength, error as? NIOWebSocketError)
         }
 
         // We expect that an error frame will have been written out.
@@ -266,13 +262,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // A fake frame header that claims this is a fragmented ping frame.
         self.buffer.writeBytes([0x09, 0x00])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.fragmentedControlFrame {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.fragmentedControlFrame, error as? NIOWebSocketError)
         }
 
         // We expect that an error frame will have been written out.
@@ -286,13 +277,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // A fake frame header that claims this is a ping frame with 126 bytes of data.
         self.buffer.writeBytes([0x89, 0x7E, 0x00, 0x7E])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.multiByteControlFrameLength {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.multiByteControlFrameLength, error as? NIOWebSocketError)
         }
 
         // We expect that an error frame will have been written out.
@@ -308,13 +294,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // A fake frame header that claims this is a fragmented ping frame.
         self.buffer.writeBytes([0x09, 0x00])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.fragmentedControlFrame {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.fragmentedControlFrame, error as? NIOWebSocketError)
         }
 
         // We expect that an error frame will have been written out.
@@ -325,9 +306,10 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         let wrongFrame: [UInt8] = [0x81, 0xFE, 0x40, 0x01]
         self.buffer.writeBytes(wrongFrame)
         XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
-            if case .some(.dataReceivedInErrorState(let data)) = error as? ByteToMessageDecoderError {
+            if case .some(.dataReceivedInErrorState(let innerError, let data)) = error as? ByteToMessageDecoderError {
                 // ok
-                XCTAssertEqual(wrongFrame, Array(data.1.readableBytesView))
+                XCTAssertEqual(.fragmentedControlFrame, innerError as? NIOWebSocketError)
+                XCTAssertEqual(wrongFrame, Array(data.readableBytesView))
             } else {
                 XCTFail("unexpected error: \(error)")
             }
@@ -375,13 +357,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // larger than the frame max.
         self.buffer.writeBytes([0x81, 0xFE, 0x40, 0x01])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.invalidFrameLength {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.invalidFrameLength, error as? NIOWebSocketError)
         }
 
         // No error frame should be written.
@@ -397,13 +374,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // A fake frame header that claims this is a fragmented ping frame.
         self.buffer.writeBytes([0x09, 0x00])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.fragmentedControlFrame {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.fragmentedControlFrame, error as? NIOWebSocketError)
         }
 
         // No error frame should be written.
@@ -419,13 +391,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // A fake frame header that claims this is a ping frame with 126 bytes of data.
         self.buffer.writeBytes([0x89, 0x7E, 0x00, 0x7E])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.multiByteControlFrameLength {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.multiByteControlFrameLength, error as? NIOWebSocketError)
         }
 
         // No error frame should be written.
@@ -441,13 +408,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // A fake frame header that claims this is a fragmented ping frame.
         self.buffer.writeBytes([0x09, 0x00])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.fragmentedControlFrame {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.fragmentedControlFrame, error as? NIOWebSocketError)
         }
 
         // No error frame should be written.
@@ -458,9 +420,10 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         let wrongFrame: [UInt8] = [0x81, 0xFE, 0x40, 0x01]
         self.buffer.writeBytes(wrongFrame)
         XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
-            if case .some(.dataReceivedInErrorState(let data)) = error as? ByteToMessageDecoderError {
+            if case .some(.dataReceivedInErrorState(let innerError, let data)) = error as? ByteToMessageDecoderError {
                 // ok
-                XCTAssertEqual(wrongFrame, Array(data.1.readableBytesView))
+                XCTAssertEqual(.fragmentedControlFrame, innerError as? NIOWebSocketError)
+                XCTAssertEqual(wrongFrame, Array(data.readableBytesView))
             } else {
                 XCTFail("unexpected error: \(error)")
             }
@@ -481,13 +444,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // larger than the frame max.
         self.buffer.writeBytes([0x81, 0xFE, 0x40, 0x01])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.invalidFrameLength {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.invalidFrameLength, error as? NIOWebSocketError)
         }
 
         // We expect that an error frame will have been written out.
@@ -504,13 +462,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // A fake frame header that claims this is a fragmented ping frame.
         self.buffer.writeBytes([0x09, 0x00])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.fragmentedControlFrame {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.fragmentedControlFrame, error as? NIOWebSocketError)
         }
 
         // We expect that an error frame will have been written out.
@@ -527,13 +480,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // A fake frame header that claims this is a ping frame with 126 bytes of data.
         self.buffer.writeBytes([0x89, 0x7E, 0x00, 0x7E])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.multiByteControlFrameLength {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.multiByteControlFrameLength, error as? NIOWebSocketError)
         }
 
         // We expect that an error frame will have been written out.
@@ -552,13 +500,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         // A fake frame header that claims this is a fragmented ping frame.
         self.buffer.writeBytes([0x09, 0x00])
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.fragmentedControlFrame {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.fragmentedControlFrame, error as? NIOWebSocketError)
         }
 
         // We expect that an error frame will have been written out.
@@ -569,9 +512,10 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
         let wrongFrame: [UInt8] = [0x81, 0xFE, 0x40, 0x01]
         self.buffer.writeBytes(wrongFrame)
         XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
-            if case .some(.dataReceivedInErrorState(let data)) = error as? ByteToMessageDecoderError {
+            if case .some(.dataReceivedInErrorState(let innerError, let data)) = error as? ByteToMessageDecoderError {
                 // ok
-                XCTAssertEqual(wrongFrame, Array(data.1.readableBytesView))
+                XCTAssertEqual(.fragmentedControlFrame, innerError as? NIOWebSocketError)
+                XCTAssertEqual(wrongFrame, Array(data.readableBytesView))
             } else {
                 XCTFail("unexpected error: \(error)")
             }
@@ -602,13 +546,8 @@ public final class WebSocketFrameDecoderTest: XCTestCase {
             XCTAssertNotNil(error as? Dummy, "unexpected error: \(error)")
         }
 
-        do {
-            try self.decoderChannel.writeInbound(self.buffer)
-            XCTFail("did not throw")
-        } catch NIOWebSocketError.invalidFrameLength {
-            // OK
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try self.decoderChannel.writeInbound(self.buffer)) { error in
+            XCTAssertEqual(.invalidFrameLength, error as? NIOWebSocketError)
         }
 
         // We expect that an error frame will have been written out.

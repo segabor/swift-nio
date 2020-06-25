@@ -24,6 +24,7 @@ import XCTest
 
 extension DatagramChannelTests {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (DatagramChannelTests) -> () throws -> Void)] {
       return [
                 ("testBasicChannelCommunication", testBasicChannelCommunication),
@@ -49,6 +50,7 @@ extension DatagramChannelTests {
                 ("testBasicMultipleReads", testBasicMultipleReads),
                 ("testMmsgWillTruncateWithoutChangeToAllocator", testMmsgWillTruncateWithoutChangeToAllocator),
                 ("testRecvMmsgForMultipleCycles", testRecvMmsgForMultipleCycles),
+                ("testSetGetEcnNotificationOption", testSetGetEcnNotificationOption),
            ]
    }
 }

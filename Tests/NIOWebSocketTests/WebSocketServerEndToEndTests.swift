@@ -45,9 +45,7 @@ extension ByteBuffer {
 
 extension EmbeddedChannel {
     func writeString(_ string: String) -> EventLoopFuture<Void> {
-        var buffer = self.allocator.buffer(capacity: string.utf8.count)
-        buffer.writeString(string)
-        return self.writeAndFlush(buffer)
+        return self.writeAndFlush(self.allocator.buffer(string: string))
     }
 }
 
@@ -184,17 +182,11 @@ class WebSocketServerEndToEndTests: XCTestCase {
         }
 
         let upgradeRequest = self.upgradeRequest(extraHeaders: ["Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "AQIDBAUGBwgJCgsMDQ4PEC=="])
-        var buffer = server.allocator.buffer(capacity: upgradeRequest.utf8.count)
-        buffer.writeString(upgradeRequest)
+        let buffer = server.allocator.buffer(string: upgradeRequest)
 
         // Write this directly to the server.
-        do {
-            try server.writeInbound(buffer)
-            XCTFail("Did not throw")
-        } catch let error as NIOWebSocketUpgradeError where error == .unsupportedWebSocketTarget {
-            // ok
-        } catch {
-            XCTFail("Unexpected error hit: \(error)")
+        XCTAssertThrowsError(try server.writeInbound(buffer)) { error in
+            XCTAssertEqual(.unsupportedWebSocketTarget, error as? NIOWebSocketUpgradeError)
         }
 
         // Nothing gets written.
@@ -256,17 +248,11 @@ class WebSocketServerEndToEndTests: XCTestCase {
         }
 
         let upgradeRequest = self.upgradeRequest(extraHeaders: ["Sec-WebSocket-Version": "12", "Sec-WebSocket-Key": "AQIDBAUGBwgJCgsMDQ4PEC=="])
-        var buffer = server.allocator.buffer(capacity: upgradeRequest.utf8.count)
-        buffer.writeString(upgradeRequest)
+        let buffer = server.allocator.buffer(string: upgradeRequest)
 
         // Write this directly to the server.
-        do {
-            try server.writeInbound(buffer)
-            XCTFail("Did not throw")
-        } catch let error as NIOWebSocketUpgradeError where error == .invalidUpgradeHeader {
-            // ok
-        } catch {
-            XCTFail("Unexpected error hit: \(error)")
+        XCTAssertThrowsError(try server.writeInbound(buffer)) { error in
+            XCTAssertEqual(.invalidUpgradeHeader, error as? NIOWebSocketUpgradeError)
         }
 
         // Nothing gets written.
@@ -284,17 +270,11 @@ class WebSocketServerEndToEndTests: XCTestCase {
         }
 
         let upgradeRequest = self.upgradeRequest(extraHeaders: ["Sec-WebSocket-Key": "AQIDBAUGBwgJCgsMDQ4PEC=="])
-        var buffer = server.allocator.buffer(capacity: upgradeRequest.utf8.count)
-        buffer.writeString(upgradeRequest)
+        let buffer = server.allocator.buffer(string: upgradeRequest)
 
         // Write this directly to the server.
-        do {
-            try server.writeInbound(buffer)
-            XCTFail("Did not throw")
-        } catch let error as NIOWebSocketUpgradeError where error == .invalidUpgradeHeader {
-            // ok
-        } catch {
-            XCTFail("Unexpected error hit: \(error)")
+        XCTAssertThrowsError(try server.writeInbound(buffer)) { error in
+            XCTAssertEqual(.invalidUpgradeHeader, error as? NIOWebSocketUpgradeError)
         }
 
         // Nothing gets written.
@@ -312,17 +292,11 @@ class WebSocketServerEndToEndTests: XCTestCase {
         }
 
         let upgradeRequest = self.upgradeRequest(extraHeaders: ["Sec-WebSocket-Version": "13"])
-        var buffer = server.allocator.buffer(capacity: upgradeRequest.utf8.count)
-        buffer.writeString(upgradeRequest)
+        let buffer = server.allocator.buffer(string: upgradeRequest)
 
         // Write this directly to the server.
-        do {
-            try server.writeInbound(buffer)
-            XCTFail("Did not throw")
-        } catch let error as NIOWebSocketUpgradeError where error == .invalidUpgradeHeader {
-            // ok
-        } catch {
-            XCTFail("Unexpected error hit: \(error)")
+        XCTAssertThrowsError(try server.writeInbound(buffer)) { error in
+            XCTAssertEqual(.invalidUpgradeHeader, error as? NIOWebSocketUpgradeError)
         }
 
         // Nothing gets written.
@@ -472,13 +446,8 @@ class WebSocketServerEndToEndTests: XCTestCase {
         data.writeBytes([0x89, 0x7E, 0x00, 0x7E])
         XCTAssertNoThrow(try client.writeAndFlush(data).wait())
 
-        do {
-            try interactInMemory(client, server, eventLoop: loop)
-            XCTFail("Did not throw")
-        } catch NIOWebSocketError.multiByteControlFrameLength {
-            // ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try interactInMemory(client, server, eventLoop: loop)) { error in
+            XCTAssertEqual(NIOWebSocketError.multiByteControlFrameLength, error as? NIOWebSocketError)
         }
 
         XCTAssertEqual(recorder.errors.count, 1)
@@ -516,13 +485,8 @@ class WebSocketServerEndToEndTests: XCTestCase {
         data.writeBytes([0x89, 0x7E, 0x00, 0x7E])
         XCTAssertNoThrow(try client.writeAndFlush(data).wait())
 
-        do {
-            try interactInMemory(client, server, eventLoop: loop)
-            XCTFail("Did not throw")
-        } catch NIOWebSocketError.multiByteControlFrameLength {
-            // ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try interactInMemory(client, server, eventLoop: loop)) { error in
+            XCTAssertEqual(NIOWebSocketError.multiByteControlFrameLength, error as? NIOWebSocketError)
         }
 
         XCTAssertEqual(recorder.errors.count, 1)

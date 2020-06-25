@@ -24,16 +24,23 @@ import XCTest
 
 extension HTTPRequestEncoderTests {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (HTTPRequestEncoderTests) -> () throws -> Void)] {
       return [
                 ("testNoAutoHeadersForHEAD", testNoAutoHeadersForHEAD),
                 ("testNoAutoHeadersForGET", testNoAutoHeadersForGET),
                 ("testGETContentHeadersLeftAlone", testGETContentHeadersLeftAlone),
-                ("testNoContentLengthHeadersForHEAD", testNoContentLengthHeadersForHEAD),
-                ("testNoTransferEncodingHeadersForHEAD", testNoTransferEncodingHeadersForHEAD),
+                ("testContentLengthHeadersForHEAD", testContentLengthHeadersForHEAD),
+                ("testTransferEncodingHeadersForHEAD", testTransferEncodingHeadersForHEAD),
+                ("testNoContentLengthHeadersForTRACE", testNoContentLengthHeadersForTRACE),
+                ("testNoTransferEncodingHeadersForTRACE", testNoTransferEncodingHeadersForTRACE),
                 ("testNoChunkedEncodingForHTTP10", testNoChunkedEncodingForHTTP10),
                 ("testBody", testBody),
                 ("testCONNECT", testCONNECT),
+                ("testChunkedEncodingIsTheDefault", testChunkedEncodingIsTheDefault),
+                ("testChunkedEncodingCanBetEnabled", testChunkedEncodingCanBetEnabled),
+                ("testChunkedEncodingDealsWithZeroLengthChunks", testChunkedEncodingDealsWithZeroLengthChunks),
+                ("testChunkedEncodingWorksIfNoPromisesAreAttachedToTheWrites", testChunkedEncodingWorksIfNoPromisesAreAttachedToTheWrites),
            ]
    }
 }

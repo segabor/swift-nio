@@ -19,37 +19,33 @@ import NIOTestUtils
 
 class HTTPDecoderTest: XCTestCase {
     private var channel: EmbeddedChannel!
-    private var loop: EmbeddedEventLoop!
+    private var loop: EmbeddedEventLoop {
+        return self.channel.embeddedEventLoop
+    }
 
     override func setUp() {
         self.channel = EmbeddedChannel()
-        self.loop = channel.embeddedEventLoop
     }
 
     override func tearDown() {
+        XCTAssertNoThrow(try self.channel?.finish(acceptAlreadyClosed: true))
         self.channel = nil
-        self.loop = nil
     }
 
     func testDoesNotDecodeRealHTTP09Request() throws {
         XCTAssertNoThrow(try channel.pipeline.addHandler(ByteToMessageHandler(HTTPRequestDecoder())).wait())
-
+        
         // This is an invalid HTTP/0.9 simple request (too many CRLFs), but we need to
         // trigger https://github.com/nodejs/http-parser/issues/386 or http_parser won't
         // actually parse this at all.
         var buffer = channel.allocator.buffer(capacity: 64)
         buffer.writeStaticString("GET /a-file\r\n\r\n")
-
-        do {
-            try channel.writeInbound(buffer)
-            XCTFail("Did not error")
-        } catch HTTPParserError.invalidVersion {
-            // ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            XCTAssertEqual(.invalidVersion, error as? HTTPParserError)
         }
-
-       loop.run()
+        
+        self.loop.run()
     }
 
     func testDoesNotDecodeFakeHTTP09Request() throws {
@@ -59,16 +55,11 @@ class HTTPDecoderTest: XCTestCase {
         var buffer = channel.allocator.buffer(capacity: 64)
         buffer.writeStaticString("GET / HTTP/0.9\r\nHost: whatever\r\n\r\n")
 
-        do {
-            try channel.writeInbound(buffer)
-            XCTFail("Did not error")
-        } catch HTTPParserError.invalidVersion {
-            // ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            XCTAssertEqual(.invalidVersion, error as? HTTPParserError)
         }
 
-        loop.run()
+        self.loop.run()
     }
 
     func testDoesNotDecodeHTTP2XRequest() throws {
@@ -79,16 +70,11 @@ class HTTPDecoderTest: XCTestCase {
         var buffer = channel.allocator.buffer(capacity: 64)
         buffer.writeStaticString("GET / HTTP/2.0\r\nHost: whatever\r\n\r\n")
 
-        do {
-            try channel.writeInbound(buffer)
-            XCTFail("Did not error")
-        } catch HTTPParserError.invalidVersion {
-            // ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            XCTAssertEqual(.invalidVersion, error as? HTTPParserError)
         }
 
-        loop.run()
+        self.loop.run()
     }
 
     func testToleratesHTTP13Request() throws {
@@ -115,16 +101,11 @@ class HTTPDecoderTest: XCTestCase {
         var buffer = channel.allocator.buffer(capacity: 64)
         buffer.writeStaticString("This is file data\n")
 
-        do {
-            try channel.writeInbound(buffer)
-            XCTFail("Did not error")
-        } catch HTTPParserError.invalidConstant {
-            // ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            XCTAssertEqual(.invalidConstant, error as? HTTPParserError)
         }
 
-        loop.run()
+        self.loop.run()
     }
 
     func testDoesNotDecodeFakeHTTP09Response() throws {
@@ -138,16 +119,11 @@ class HTTPDecoderTest: XCTestCase {
         var buffer = channel.allocator.buffer(capacity: 64)
         buffer.writeStaticString("HTTP/0.9 200 OK\r\nServer: whatever\r\n\r\n")
 
-        do {
-            try channel.writeInbound(buffer)
-            XCTFail("Did not error")
-        } catch HTTPParserError.invalidVersion {
-            // ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            XCTAssertEqual(.invalidVersion, error as? HTTPParserError)
         }
 
-        loop.run()
+        self.loop.run()
     }
 
     func testDoesNotDecodeHTTP2XResponse() throws {
@@ -162,16 +138,11 @@ class HTTPDecoderTest: XCTestCase {
         var buffer = channel.allocator.buffer(capacity: 64)
         buffer.writeStaticString("HTTP/2.0 200 OK\r\nServer: whatever\r\n\r\n")
 
-        do {
-            try channel.writeInbound(buffer)
-            XCTFail("Did not error")
-        } catch HTTPParserError.invalidVersion {
-            // ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            XCTAssertEqual(.invalidVersion, error as? HTTPParserError)
         }
 
-        loop.run()
+        self.loop.run()
     }
 
     func testToleratesHTTP13Response() throws {
@@ -274,16 +245,11 @@ class HTTPDecoderTest: XCTestCase {
             }
 
             func handlerAdded(context: ChannelHandlerContext) {
-                var fulfilledImmediately = true
-                defer {
-                    fulfilledImmediately = false
-                }
                 context.pipeline.removeHandler(name: "decoder").whenComplete { result in
                     _ = result.mapError { (error: Error) -> Error in
                         XCTFail("unexpected error \(error)")
                         return error
                     }
-                    //XCTAssertTrue(fulfilledImmediately)
                 }
             }
 
@@ -482,6 +448,9 @@ class HTTPDecoderTest: XCTestCase {
     func testIllegalHeaderNamesCauseError() {
         func writeToFreshRequestDecoderChannel(_ string: String) throws {
             let channel = EmbeddedChannel(handler: ByteToMessageHandler(HTTPRequestDecoder()))
+            defer {
+                XCTAssertNoThrow(try channel.finish())
+            }
             var buffer = channel.allocator.buffer(capacity: 256)
             buffer.writeString(string)
             try channel.writeInbound(buffer)
@@ -506,6 +475,9 @@ class HTTPDecoderTest: XCTestCase {
     func testNonASCIIWorksAsHeaderValue() {
         func writeToFreshRequestDecoderChannel(_ string: String) throws -> HTTPServerRequestPart? {
             let channel = EmbeddedChannel(handler: ByteToMessageHandler(HTTPRequestDecoder()))
+            defer {
+                XCTAssertNoThrow(try channel.finish())
+            }
             var buffer = channel.allocator.buffer(capacity: 256)
             buffer.writeString(string)
             try channel.writeInbound(buffer)
@@ -524,6 +496,9 @@ class HTTPDecoderTest: XCTestCase {
         let data: StaticString = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
 
         let channel = EmbeddedChannel()
+        defer {
+            XCTAssertNoThrow(try channel.finish())
+        }
         var dataBuffer = channel.allocator.buffer(capacity: 128)
         dataBuffer.writeStaticString(data)
 
@@ -538,6 +513,9 @@ class HTTPDecoderTest: XCTestCase {
 
     func testHTTPResponseWithoutHeaders() {
         let channel = EmbeddedChannel()
+        defer {
+            XCTAssertNoThrow(try channel.finish())
+        }
         var buffer = channel.allocator.buffer(capacity: 128)
         buffer.writeStaticString("HTTP/1.0 200 ok\r\n\r\n")
 
@@ -550,11 +528,7 @@ class HTTPDecoderTest: XCTestCase {
     }
 
     func testBasicVerifications() {
-        let byteBufferContainingJustAnX: ByteBuffer = {
-            var buffer = ByteBufferAllocator().buffer(capacity: 1)
-            buffer.writeString("X")
-            return buffer
-        }()
+        let byteBufferContainingJustAnX = ByteBuffer(string: "X")
         let expectedInOuts: [(String, [HTTPServerRequestPart])] = [
             ("GET / HTTP/1.1\r\n\r\n",
              [.head(.init(version: .init(major: 1, minor: 1), method: .GET, uri: "/")),
@@ -586,9 +560,7 @@ class HTTPDecoderTest: XCTestCase {
         ]
 
         let expectedInOutsBB: [(ByteBuffer, [HTTPServerRequestPart])] = expectedInOuts.map { io in
-            var buffer = ByteBufferAllocator().buffer(capacity: io.0.utf8.count)
-            buffer.writeString(io.0)
-            return (buffer, io.1)
+            return (ByteBuffer(string: io.0), io.1)
         }
         XCTAssertNoThrow(try ByteToMessageDecoderVerifier.verifyDecoder(inputOutputPairs: expectedInOutsBB,
                                                                         decoderFactory: { HTTPRequestDecoder() }))
@@ -745,4 +717,144 @@ class HTTPDecoderTest: XCTestCase {
         XCTAssertNoThrow(XCTAssert(try channel.finish().isClean))
     }
 
+    func testAppropriateErrorWhenReceivingUnsolicitedResponse() throws {
+        let channel = EmbeddedChannel()
+        defer {
+            XCTAssertNoThrow(try channel.finish())
+        }
+        var buffer = channel.allocator.buffer(capacity: 64)
+        buffer.writeStaticString("HTTP/1.1 200 OK\r\nServer: a-bad-server/1.0.0\r\n\r\n")
+
+        let decoder = ByteToMessageHandler(HTTPResponseDecoder(leftOverBytesStrategy: .dropBytes))
+        XCTAssertNoThrow(try channel.pipeline.addHandler(decoder).wait())
+
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            XCTAssertEqual(error as? NIOHTTPDecoderError, .unsolicitedResponse)
+        }
+    }
+
+    func testAppropriateErrorWhenReceivingUnsolicitedResponseDoesNotRecover() throws {
+        let channel = EmbeddedChannel()
+        defer {
+            XCTAssertNoThrow(try channel.finish())
+        }
+        var buffer = channel.allocator.buffer(capacity: 64)
+        buffer.writeStaticString("HTTP/1.1 200 OK\r\nServer: a-bad-server/1.0.0\r\n\r\n")
+
+        let decoder = ByteToMessageHandler(HTTPResponseDecoder(leftOverBytesStrategy: .dropBytes))
+        XCTAssertNoThrow(try channel.pipeline.addHandler(decoder).wait())
+
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            XCTAssertEqual(error as? NIOHTTPDecoderError, .unsolicitedResponse)
+        }
+
+        // Write a request.
+        let request = HTTPClientRequestPart.head(.init(version: .init(major: 1, minor: 1), method: .GET, uri: "/"))
+        XCTAssertNoThrow(try channel.writeOutbound(request))
+
+        // The server sending another response should lead to another error.
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            guard case .some(.dataReceivedInErrorState(let baseError, _)) = error as? ByteToMessageDecoderError else {
+                XCTFail("Unexpected error type: \(error)")
+                return
+            }
+
+            XCTAssertEqual(baseError as? NIOHTTPDecoderError, .unsolicitedResponse)
+        }
+    }
+
+    func testOneRequestTwoResponses() {
+        let eventCounter = EventCounterHandler()
+        let responseDecoder = ByteToMessageHandler(HTTPResponseDecoder())
+        let channel = EmbeddedChannel(handler: responseDecoder)
+        XCTAssertNoThrow(try channel.pipeline.addHandler(eventCounter).wait())
+
+        XCTAssertNoThrow(try channel.writeOutbound(HTTPClientRequestPart.head(.init(version: .init(major: 1, minor: 1),
+                                                                                    method: .GET, uri: "/"))))
+        var buffer = channel.allocator.buffer(capacity: 128)
+        buffer.writeString("HTTP/1.1 200 ok\r\ncontent-length: 0\r\n\r\nHTTP/1.1 200 ok\r\ncontent-length: 0\r\n\r\n")
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            XCTAssertEqual(.unsolicitedResponse, error as? NIOHTTPDecoderError)
+        }
+        XCTAssertNoThrow(XCTAssertEqual(.head(.init(version: .init(major: 1, minor: 1),
+                                                    status: .ok,
+                                                    headers: ["content-length": "0"])),
+                                        try channel.readInbound(as: HTTPClientResponsePart.self)))
+        XCTAssertNoThrow(XCTAssertEqual(.end(nil),
+                                        try channel.readInbound(as: HTTPClientResponsePart.self)))
+        XCTAssertNoThrow(XCTAssertNil(try channel.readInbound(as: HTTPClientResponsePart.self)))
+        XCTAssertNoThrow(XCTAssertNotNil(try channel.readOutbound()))
+        XCTAssertEqual(1, eventCounter.writeCalls)
+        XCTAssertEqual(1, eventCounter.flushCalls)
+        XCTAssertEqual(2, eventCounter.channelReadCalls) // .head & .end
+        XCTAssertEqual(1, eventCounter.channelReadCompleteCalls)
+        XCTAssertEqual(["channelReadComplete", "write", "flush", "channelRead", "errorCaught"], eventCounter.allTriggeredEvents())
+        XCTAssertNoThrow(XCTAssertTrue(try channel.finish().isClean))
+    }
+
+    func testRefusesRequestSmugglingAttempt() throws {
+        XCTAssertNoThrow(try channel.pipeline.addHandler(ByteToMessageHandler(HTTPRequestDecoder())).wait())
+
+        // This is a request smuggling attempt caused by duplicating the Transfer-Encoding and Content-Length headers.
+        var buffer = channel.allocator.buffer(capacity: 256)
+        buffer.writeString("POST /foo HTTP/1.1\r\n" +
+                           "Host: localhost\r\n" +
+                           "Content-length: 1\r\n" +
+                           "Transfer-Encoding: gzip, chunked\r\n\r\n" +
+                           "3\r\na=1\r\n0\r\n\r\n")
+
+        XCTAssertThrowsError(try channel.writeInbound(buffer)) { error in
+            XCTAssertEqual(.unexpectedContentLength, error as? HTTPParserError)
+        }
+
+        self.loop.run()
+    }
+
+    func testTrimsTrailingOWS() throws {
+        XCTAssertNoThrow(try channel.pipeline.addHandler(ByteToMessageHandler(HTTPRequestDecoder())).wait())
+
+        var buffer = channel.allocator.buffer(capacity: 64)
+        buffer.writeStaticString("GET / HTTP/1.1\r\nHost: localhost\r\nFoo: bar \r\nBaz: Boz\r\n\r\n")
+
+        XCTAssertNoThrow(try channel.writeInbound(buffer))
+        let request = try assertNoThrowWithValue(channel.readInbound(as: HTTPServerRequestPart.self))
+        guard case .some(.head(let head)) = request else {
+            XCTFail("Unexpected first message: \(String(describing: request))")
+            return
+        }
+        XCTAssertEqual(head.headers[canonicalForm: "Foo"], ["bar"])
+        guard case .some(.end) = try assertNoThrowWithValue(channel.readInbound(as: HTTPServerRequestPart.self)) else {
+            XCTFail("Unexpected last message")
+            return
+        }
+    }
+
+    func testMassiveChunkDoesNotBufferAndGivesUsHoweverMuchIsAvailable() {
+        XCTAssertNoThrow(try self.channel.pipeline.addHandler(ByteToMessageHandler(HTTPRequestDecoder())).wait())
+
+        var buffer = self.channel.allocator.buffer(capacity: 64)
+        buffer.writeString("POST / HTTP/1.1\r\nHost: localhost\r\ntransfer-encoding: chunked\r\n\r\n" +
+                           "FFFFFFFFFFFFF\r\nfoo")
+
+        XCTAssertNoThrow(try self.channel.writeInbound(buffer))
+
+        var maybeHead: HTTPServerRequestPart?
+        var maybeBodyChunk: HTTPServerRequestPart?
+
+        XCTAssertNoThrow(maybeHead = try self.channel.readInbound())
+        XCTAssertNoThrow(maybeBodyChunk = try self.channel.readInbound())
+        XCTAssertNoThrow(XCTAssertNil(try self.channel.readInbound(as: HTTPServerRequestPart.self)))
+
+        guard case .some(.head(let head)) = maybeHead, case .some(.body(let body)) = maybeBodyChunk else {
+            XCTFail("didn't receive head & body")
+            return
+        }
+
+        XCTAssertEqual(.POST, head.method)
+        XCTAssertEqual("foo", String(decoding: body.readableBytesView, as: Unicode.UTF8.self))
+
+        XCTAssertThrowsError(try self.channel.finish()) { error in
+            XCTAssertEqual(.invalidEOFState, error as? HTTPParserError)
+        }
+    }
 }

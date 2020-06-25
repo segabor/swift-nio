@@ -16,13 +16,6 @@ import XCTest
 import NIO
 import NIOHTTP1
 
-extension ByteBuffer {
-    init(string: String) {
-        self = ByteBufferAllocator().buffer(capacity: string.utf8.count)
-        self.writeString(string)
-    }
-}
-
 private class MessageEndHandler<Head: Equatable, Body: Equatable>: ChannelInboundHandler {
     typealias InboundIn = HTTPPart<Head, Body>
 
@@ -50,16 +43,17 @@ private class MessageEndHandler<Head: Equatable, Body: Equatable>: ChannelInboun
 /// Mostly tests assertions in [RFC 7230 § 3.3.3](https://tools.ietf.org/html/rfc7230#section-3.3.3).
 class HTTPDecoderLengthTest: XCTestCase {
     private var channel: EmbeddedChannel!
-    private var loop: EmbeddedEventLoop!
+    private var loop: EmbeddedEventLoop {
+        return self.channel.embeddedEventLoop
+    }
 
     override func setUp() {
         self.channel = EmbeddedChannel()
-        self.loop = channel.embeddedEventLoop
     }
 
     override func tearDown() {
+        XCTAssertNoThrow(try self.channel?.finish(acceptAlreadyClosed: true))
         self.channel = nil
-        self.loop = nil
     }
 
     /// The mechanism by which EOF is being sent.
@@ -140,7 +134,7 @@ class HTTPDecoderLengthTest: XCTestCase {
         // That means, per RFC 7230 § 3.3.3, the body is framed by EOF. Because this is a response, that EOF
         // may be transmitted by channelInactive.
         let response = "HTTP/\(version.major).\(version.minor) 200 OK\r\nServer: example\r\n\r\n"
-        XCTAssertNoThrow(try channel.writeInbound(IOData.byteBuffer(ByteBuffer(string: response))))
+        XCTAssertNoThrow(try channel.writeInbound(IOData.byteBuffer(channel.allocator.buffer(string: response))))
 
         // We should have a response but no body.
         XCTAssertNotNil(handler.response)
@@ -149,7 +143,7 @@ class HTTPDecoderLengthTest: XCTestCase {
         XCTAssertFalse(handler.eof)
 
         // Send a body chunk. This should be immediately passed on. Still no end or EOF.
-        XCTAssertNoThrow(try channel.writeInbound(IOData.byteBuffer(ByteBuffer(string: "some body data"))))
+        XCTAssertNoThrow(try channel.writeInbound(IOData.byteBuffer(channel.allocator.buffer(string: "some body data"))))
         XCTAssertNotNil(handler.response)
         XCTAssertEqual(handler.body!, Array("some body data".utf8))
         XCTAssertFalse(handler.receivedEnd)
@@ -291,14 +285,26 @@ class HTTPDecoderLengthTest: XCTestCase {
         try assertIgnoresLengthFields(requestMethod: .GET, responseStatus: .notModified, responseFramingField: .neither)
     }
 
-    private func assertRequestTransferEncodingHasNoBody(transferEncodingHeader: String) throws {
+    private func assertRequestTransferEncodingInError(transferEncodingHeader: String) throws {
         XCTAssertNoThrow(try channel.pipeline.addHandler(ByteToMessageHandler(HTTPRequestDecoder())).wait())
 
         let handler = MessageEndHandler<HTTPRequestHead, ByteBuffer>()
         XCTAssertNoThrow(try channel.pipeline.addHandler(handler).wait())
 
         // Send a GET with the appropriate Transfer Encoding header.
-        XCTAssertNoThrow(try channel.writeInbound(ByteBuffer(string: "POST / HTTP/1.1\r\nTransfer-Encoding: \(transferEncodingHeader)\r\n\r\n")))
+        XCTAssertThrowsError(try channel.writeInbound(channel.allocator.buffer(string: "POST / HTTP/1.1\r\nTransfer-Encoding: \(transferEncodingHeader)\r\n\r\n"))) { error in
+            XCTAssertEqual(error as? HTTPParserError, .unknown)
+        }
+    }
+
+    func testMultipleTEWithChunkedLastWorksFine() throws {
+        XCTAssertNoThrow(try channel.pipeline.addHandler(ByteToMessageHandler(HTTPRequestDecoder())).wait())
+
+        let handler = MessageEndHandler<HTTPRequestHead, ByteBuffer>()
+        XCTAssertNoThrow(try channel.pipeline.addHandler(handler).wait())
+
+        // Send a GET with the appropriate Transfer Encoding header.
+        XCTAssertNoThrow(try channel.writeInbound(channel.allocator.buffer(string: "POST / HTTP/1.1\r\nTransfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n")))
 
         // We should have a request, no body, and immediately see end of request.
         XCTAssert(handler.seenHead)
@@ -308,22 +314,12 @@ class HTTPDecoderLengthTest: XCTestCase {
         XCTAssertTrue(try channel.finish().isClean)
     }
 
-    func testMultipleTEWithChunkedLastHasNoBodyOnRequest() throws {
-        // This is not quite right: RFC 7230 should allow this as chunked. However, http_parser
-        // does not, so we don't either.
-        try assertRequestTransferEncodingHasNoBody(transferEncodingHeader: "gzip, chunked")
-    }
-
     func testMultipleTEWithChunkedFirstHasNoBodyOnRequest() throws {
-        // Here http_parser is again wrong: strictly this should 400. Again, though,
-        // if http_parser doesn't support this neither do we.
-        try assertRequestTransferEncodingHasNoBody(transferEncodingHeader: "chunked, gzip")
+        try assertRequestTransferEncodingInError(transferEncodingHeader: "chunked, gzip")
     }
 
     func testMultipleTEWithChunkedInTheMiddleHasNoBodyOnRequest() throws {
-        // Here http_parser is again wrong: strictly this should 400. Again, though,
-        // if http_parser doesn't support this neither do we.
-        try assertRequestTransferEncodingHasNoBody(transferEncodingHeader: "gzip, chunked, deflate")
+        try assertRequestTransferEncodingInError(transferEncodingHeader: "gzip, chunked, deflate")
     }
 
     private func assertResponseTransferEncodingHasBodyTerminatedByEOF(transferEncodingHeader: String, eofMechanism: EOFMechanism) throws {
@@ -341,13 +337,13 @@ class HTTPDecoderLengthTest: XCTestCase {
 
         // Send a 200 with the appropriate Transfer Encoding header. We should see the request,
         // but no body or end.
-        XCTAssertNoThrow(try channel.writeInbound(ByteBuffer(string: "HTTP/1.1 200 OK\r\nTransfer-Encoding: \(transferEncodingHeader)\r\n\r\n")))
+        XCTAssertNoThrow(try channel.writeInbound(channel.allocator.buffer(string: "HTTP/1.1 200 OK\r\nTransfer-Encoding: \(transferEncodingHeader)\r\n\r\n")))
         XCTAssert(handler.seenHead)
         XCTAssertFalse(handler.seenBody)
         XCTAssertFalse(handler.seenEnd)
 
         // Now send body. Note that this is *not* chunk encoded. We should also see a body.
-        XCTAssertNoThrow(try channel.writeInbound(ByteBuffer(string: "caribbean")))
+        XCTAssertNoThrow(try channel.writeInbound(channel.allocator.buffer(string: "caribbean")))
         XCTAssert(handler.seenHead)
         XCTAssert(handler.seenBody)
         XCTAssertFalse(handler.seenEnd)
@@ -365,10 +361,51 @@ class HTTPDecoderLengthTest: XCTestCase {
         XCTAssertTrue(try channel.finish().isClean)
     }
 
+    private func assertResponseTransferEncodingHasBodyTerminatedByEndOfChunk(transferEncodingHeader: String, eofMechanism: EOFMechanism) throws {
+        XCTAssertNoThrow(try channel.pipeline.addHandler(HTTPRequestEncoder()).wait())
+        XCTAssertNoThrow(try channel.pipeline.addHandler(ByteToMessageHandler(HTTPResponseDecoder())).wait())
+
+        let handler = MessageEndHandler<HTTPResponseHead, ByteBuffer>()
+        XCTAssertNoThrow(try channel.pipeline.addHandler(handler).wait())
+
+        // Prime the decoder with a request and consume it.
+        XCTAssertTrue(try channel.writeOutbound(HTTPClientRequestPart.head(HTTPRequestHead(version: .init(major: 1, minor: 1),
+                                                                                           method: .GET,
+                                                                                           uri: "/"))).isFull)
+        XCTAssertNoThrow(XCTAssertNotNil(try channel.readOutbound(as: ByteBuffer.self)))
+
+        // Send a 200 with the appropriate Transfer Encoding header. We should see the request.
+        XCTAssertNoThrow(try channel.writeInbound(channel.allocator.buffer(string: "HTTP/1.1 200 OK\r\nTransfer-Encoding: \(transferEncodingHeader)\r\n\r\n")))
+        XCTAssert(handler.seenHead)
+        XCTAssertFalse(handler.seenBody)
+        XCTAssertFalse(handler.seenEnd)
+
+        // Now send body. Note that this *is* chunk encoded. We should also see a body.
+        XCTAssertNoThrow(try channel.writeInbound(channel.allocator.buffer(string: "9\r\ncaribbean\r\n")))
+        XCTAssert(handler.seenHead)
+        XCTAssert(handler.seenBody)
+        XCTAssertFalse(handler.seenEnd)
+
+        // Now send EOF. This should error, as we're expecting the end chunk.
+        if case .halfClosure = eofMechanism {
+            channel.pipeline.fireUserInboundEventTriggered(ChannelEvent.inputClosed)
+        } else {
+            channel.pipeline.fireChannelInactive()
+        }
+
+        XCTAssert(handler.seenHead)
+        XCTAssert(handler.seenBody)
+        XCTAssertFalse(handler.seenEnd)
+
+        XCTAssertThrowsError(try channel.throwIfErrorCaught()) { error in
+            XCTAssertEqual(error as? HTTPParserError, .invalidEOFState)
+        }
+
+        XCTAssertTrue(try channel.finish().isClean)
+    }
+
     func testMultipleTEWithChunkedLastHasEOFBodyOnResponseWithChannelInactive() throws {
-        // This is not right: RFC 7230 should allow this as chunked, but http_parser instead parses it as
-        // EOF-terminated. We can't easily override that, so we don't.
-        try assertResponseTransferEncodingHasBodyTerminatedByEOF(transferEncodingHeader: "gzip, chunked", eofMechanism: .channelInactive)
+        try assertResponseTransferEncodingHasBodyTerminatedByEndOfChunk(transferEncodingHeader: "gzip, chunked", eofMechanism: .channelInactive)
     }
 
     func testMultipleTEWithChunkedFirstHasEOFBodyOnResponseWithChannelInactive() throws {
@@ -382,9 +419,7 @@ class HTTPDecoderLengthTest: XCTestCase {
     }
 
     func testMultipleTEWithChunkedLastHasEOFBodyOnResponseWithHalfClosure() throws {
-        // This is not right: RFC 7230 should allow this as chunked, but http_parser instead parses it as
-        // EOF-terminated. We can't easily override that, so we don't.
-        try assertResponseTransferEncodingHasBodyTerminatedByEOF(transferEncodingHeader: "gzip, chunked", eofMechanism: .halfClosure)
+        try assertResponseTransferEncodingHasBodyTerminatedByEndOfChunk(transferEncodingHeader: "gzip, chunked", eofMechanism: .halfClosure)
     }
 
     func testMultipleTEWithChunkedFirstHasEOFBodyOnResponseWithHalfClosure() throws {
@@ -401,13 +436,9 @@ class HTTPDecoderLengthTest: XCTestCase {
         XCTAssertNoThrow(try channel.pipeline.addHandler(ByteToMessageHandler(HTTPRequestDecoder())).wait())
 
         // Send a GET with the invalid headers.
-        do {
-            try channel.writeInbound(ByteBuffer(string: "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n"))
-            XCTFail("Did not throw")
-        } catch HTTPParserError.unexpectedContentLength {
-            // ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        let request = channel.allocator.buffer(string: "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n")
+        XCTAssertThrowsError(try channel.writeInbound(request)) { error in
+            XCTAssertEqual(HTTPParserError.unexpectedContentLength, error as? HTTPParserError)
         }
 
         // Must spin the loop.
@@ -425,13 +456,9 @@ class HTTPDecoderLengthTest: XCTestCase {
                                                                                            uri: "/"))).isFull)
 
         // Send a 200 OK with the invalid headers.
-        do {
-            try channel.writeInbound(ByteBuffer(string: "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n"))
-            XCTFail("Did not throw")
-        } catch HTTPParserError.unexpectedContentLength {
-            // ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        let response = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n"
+        XCTAssertThrowsError(try channel.writeInbound(channel.allocator.buffer(string: response))) { error in
+            XCTAssertEqual(HTTPParserError.unexpectedContentLength, error as? HTTPParserError)
         }
 
         // Must spin the loop.
@@ -443,15 +470,10 @@ class HTTPDecoderLengthTest: XCTestCase {
         XCTAssertNoThrow(try channel.pipeline.addHandler(ByteToMessageHandler(HTTPRequestDecoder())).wait())
 
         // Send a GET with the invalid headers.
-        do {
-            try channel.writeInbound(ByteBuffer(string: "POST / HTTP/1.1\r\nContent-Length: \(contentLengthField)\r\n\r\n"))
-            XCTFail("Did not throw")
-        } catch HTTPParserError.invalidContentLength {
-            // ok
-        } catch HTTPParserError.unexpectedContentLength {
-            // also ok
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        let request = "POST / HTTP/1.1\r\nContent-Length: \(contentLengthField)\r\n\r\n"
+        XCTAssertThrowsError(try channel.writeInbound(channel.allocator.buffer(string: request))) { error in
+            XCTAssert(HTTPParserError.unexpectedContentLength == error as? HTTPParserError ||
+                HTTPParserError.invalidContentLength == error as? HTTPParserError)
         }
 
         // Must spin the loop.
@@ -478,13 +500,9 @@ class HTTPDecoderLengthTest: XCTestCase {
 
         // Send two POSTs with repeated content length, one with one field and one with two.
         // Both should error.
-        do {
-            try channel.writeInbound(ByteBuffer(string: "POST / HTTP/1.1\r\nContent-Length: 4, 4\r\n\r\n"))
-            XCTFail("Did not throw")
-        } catch HTTPParserError.invalidContentLength {
-            // ok
-        } catch {
-            XCTFail("Unexpected error \(error)")
+        let request = "POST / HTTP/1.1\r\nContent-Length: 4, 4\r\n\r\n"
+        XCTAssertThrowsError(try channel.writeInbound(channel.allocator.buffer(string: request))) { error in
+            XCTAssertEqual(HTTPParserError.invalidContentLength, error as? HTTPParserError)
         }
 
         // Must spin the loop.
@@ -497,13 +515,9 @@ class HTTPDecoderLengthTest: XCTestCase {
         // the spec. Regardless, we match it.
         XCTAssertNoThrow(try channel.pipeline.addHandler(ByteToMessageHandler(HTTPRequestDecoder())).wait())
 
-        do {
-            try channel.writeInbound(ByteBuffer(string: "POST / HTTP/1.1\r\nContent-Length: 4\r\nContent-Length: 4\r\n\r\n"))
-            XCTFail("Did not throw")
-        } catch HTTPParserError.unexpectedContentLength {
-            // ok
-        } catch {
-            XCTFail("Unexpected error \(error)")
+        let request = "POST / HTTP/1.1\r\nContent-Length: 4\r\nContent-Length: 4\r\n\r\n"
+        XCTAssertThrowsError(try channel.writeInbound(channel.allocator.buffer(string: request))) { error in
+            XCTAssertEqual(HTTPParserError.unexpectedContentLength, error as? HTTPParserError)
         }
 
         // Must spin the loop.
@@ -519,7 +533,7 @@ class HTTPDecoderLengthTest: XCTestCase {
 
         // Send a POST without a length field of any kind. This should be a zero-length request,
         // so .end should come immediately.
-        XCTAssertNoThrow(try channel.writeInbound(ByteBuffer(string: "POST / HTTP/1.1\r\nHost: example.org\r\n\r\n")))
+        XCTAssertNoThrow(try channel.writeInbound(channel.allocator.buffer(string: "POST / HTTP/1.1\r\nHost: example.org\r\n\r\n")))
         XCTAssert(handler.seenHead)
         XCTAssertFalse(handler.seenBody)
         XCTAssert(handler.seenEnd)

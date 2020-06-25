@@ -13,7 +13,7 @@
 ##
 ##===----------------------------------------------------------------------===##
 
-set -e
+set -ex
 
 my_path="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 root_path="$my_path/.."
@@ -52,7 +52,12 @@ fi
 if ! command -v jazzy > /dev/null; then
   gem install jazzy --no-ri --no-rdoc
 fi
-module_switcher="docs/$version/README.md"
+
+jazzy_dir="$root_path/.build/jazzy"
+rm -rf "$jazzy_dir"
+mkdir -p "$jazzy_dir"
+
+module_switcher="$jazzy_dir/README.md"
 jazzy_args=(--clean
             --author 'SwiftNIO Team'
             --readme "$module_switcher"
@@ -81,13 +86,14 @@ For the API documentation of the other repositories in the SwiftNIO family check
 - [`swift-nio` API docs](https://apple.github.io/swift-nio/docs/current/NIO/index.html)
 - [`swift-nio-ssl` API docs](https://apple.github.io/swift-nio-ssl/docs/current/NIOSSL/index.html)
 - [`swift-nio-http2` API docs](https://apple.github.io/swift-nio-http2/docs/current/NIOHTTP2/index.html)
+- [`swift-nio-extras` API docs](https://apple.github.io/swift-nio-extras/docs/current/NIOExtras/index.html)
 
 EOF
 
 for module in "${modules[@]}"; do
-  args=("${jazzy_args[@]}"  --output "$root_path/docs/$version/$module" --module "$module"
-        --module-version $version
-        --root-url "https://apple.github.io/swift-nio/docs/$version/$module")
+  args=("${jazzy_args[@]}" --output "$jazzy_dir/docs/$version/$module" --docset-path "$jazzy_dir/docset/$version/$module"
+        --module "$module" --module-version $version
+        --root-url "https://apple.github.io/swift-nio/docs/$version/$module/")
   if [[ -f "$root_path/.build/sourcekitten/$module.json" ]]; then
     args+=(--sourcekitten-sourcefile "$root_path/.build/sourcekitten/$module.json")
   fi
@@ -95,13 +101,15 @@ for module in "${modules[@]}"; do
 done
 
 # push to github pages
-if [[ $CI == true ]]; then
+if [[ $PUSH == true ]]; then
   BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
   GIT_AUTHOR=$(git --no-pager show -s --format='%an <%ae>' HEAD)
   git fetch origin +gh-pages:gh-pages
   git checkout gh-pages
-  rm -rf docs/current
-  cp -r docs/$version docs/current
+  rm -rf "docs/$version"
+  rm -rf "docs/current"
+  cp -r "$jazzy_dir/docs/$version" docs/
+  cp -r "docs/$version" docs/current
   git add --all docs
   echo '<html><head><meta http-equiv="refresh" content="0; url=docs/current/NIO/index.html" /></head></html>' > index.html
   git add index.html
@@ -109,6 +117,7 @@ if [[ $CI == true ]]; then
   git add .nojekyll
   changes=$(git diff-index --name-only HEAD)
   if [[ -n "$changes" ]]; then
+    echo -e "changes detected\n$changes"
     git commit --author="$GIT_AUTHOR" -m "publish $version docs"
     git push origin gh-pages
   else

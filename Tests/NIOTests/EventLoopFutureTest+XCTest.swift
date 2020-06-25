@@ -24,6 +24,7 @@ import XCTest
 
 extension EventLoopFutureTest {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (EventLoopFutureTest) -> () throws -> Void)] {
       return [
                 ("testFutureFulfilledIfHasResult", testFutureFulfilledIfHasResult),
@@ -74,6 +75,14 @@ extension EventLoopFutureTest {
                 ("testAlwaysWithFailingPromise", testAlwaysWithFailingPromise),
                 ("testPromiseCompletedWithSuccessfulFuture", testPromiseCompletedWithSuccessfulFuture),
                 ("testPromiseCompletedWithFailedFuture", testPromiseCompletedWithFailedFuture),
+                ("testPromiseCompletedWithSuccessfulResult", testPromiseCompletedWithSuccessfulResult),
+                ("testPromiseCompletedWithFailedResult", testPromiseCompletedWithFailedResult),
+                ("testAndAllCompleteWithZeroFutures", testAndAllCompleteWithZeroFutures),
+                ("testAndAllSucceedWithZeroFutures", testAndAllSucceedWithZeroFutures),
+                ("testAndAllCompleteWithPreSucceededFutures", testAndAllCompleteWithPreSucceededFutures),
+                ("testAndAllCompleteWithPreFailedFutures", testAndAllCompleteWithPreFailedFutures),
+                ("testAndAllCompleteWithMixOfPreSuccededAndNotYetCompletedFutures", testAndAllCompleteWithMixOfPreSuccededAndNotYetCompletedFutures),
+                ("testWhenAllCompleteWithMixOfPreSuccededAndNotYetCompletedFutures", testWhenAllCompleteWithMixOfPreSuccededAndNotYetCompletedFutures),
            ]
    }
 }

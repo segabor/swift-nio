@@ -42,14 +42,14 @@ class CircularBufferTests: XCTestCase {
         XCTAssertTrue(ring.isEmpty)
         XCTAssertEqual(0, ring.count)
 
-        for f in 1..<1000 {
+        for f in 1..<100 {
             ring.append(f)
             XCTAssertEqual(f, ring.count)
             XCTAssertTrue(ring.testOnly_verifyInvariantsForNonSlices())
         }
-        for f in 1..<1000 {
+        for f in 1..<100 {
             XCTAssertEqual(f, ring.removeFirst())
-            XCTAssertEqual(999 - f, ring.count)
+            XCTAssertEqual(99 - f, ring.count)
             XCTAssertTrue(ring.testOnly_verifyInvariantsForNonSlices())
         }
         XCTAssertTrue(ring.isEmpty)
@@ -911,5 +911,77 @@ class CircularBufferTests: XCTestCase {
             value = 5
         }
         XCTAssertEqual([0, 5, 2, 3], Array(buf))
+    }
+    
+    func testEquality() {
+        // Empty buffers
+        let emptyA = CircularBuffer<Int>()
+        let emptyB = CircularBuffer<Int>()
+        XCTAssertEqual(emptyA, emptyB)
+        
+        var buffA = CircularBuffer<Int>()
+        var buffB = CircularBuffer<Int>()
+        var buffC = CircularBuffer<Int>()
+        var buffD = CircularBuffer<Int>()
+        buffA.append(contentsOf: 1...10)
+        buffB.append(contentsOf: 1...10)
+        buffC.append(contentsOf: 2...11) // Same count different values
+        buffD.append(contentsOf: 1...2) // Different count
+        XCTAssertEqual(buffA, buffB)
+        XCTAssertNotEqual(buffA, buffC)
+        XCTAssertNotEqual(buffA, buffD)
+        
+        // Will make internal head/tail indexes different
+        var prependBuff = CircularBuffer<Int>()
+        var appendBuff = CircularBuffer<Int>()
+        for i in (1...100).reversed() {
+            prependBuff.prepend(i)
+        }
+        for i in 1...100 {
+            appendBuff.append(i)
+        }
+        // But the contents are still the same
+        XCTAssertEqual(prependBuff, appendBuff)
+    }
+    
+    func testHash() {
+        let emptyA = CircularBuffer<Int>()
+        let emptyB = CircularBuffer<Int>()
+        XCTAssertEqual(Set([emptyA,emptyB]).count, 1)
+        
+        var buffA = CircularBuffer<Int>()
+        var buffB = CircularBuffer<Int>()
+        buffA.append(contentsOf: 1...10)
+        buffB.append(contentsOf: 1...10)
+        XCTAssertEqual(Set([buffA,buffB]).count, 1)
+        buffB.append(123)
+        XCTAssertEqual(Set([buffA,buffB]).count, 2)
+        buffA.append(1)
+        XCTAssertEqual(Set([buffA,buffB]).count, 2)
+        
+        // Will make internal head/tail indexes different
+        var prependBuff = CircularBuffer<Int>()
+        var appendBuff = CircularBuffer<Int>()
+        for i in (1...100).reversed() {
+            prependBuff.prepend(i)
+        }
+        for i in 1...100 {
+            appendBuff.append(i)
+        }
+        XCTAssertEqual(Set([prependBuff,appendBuff]).count, 1)
+    }
+    
+    func testArrayLiteralInit() {
+        let empty: CircularBuffer<Int> = []
+        XCTAssert(empty.isEmpty)
+        
+        let increasingInts: CircularBuffer = [1, 2, 3, 4, 5]
+        XCTAssertEqual(increasingInts.count, 5)
+        XCTAssert(zip(increasingInts, 1...5).allSatisfy(==))
+        
+        let someIntsArray = [-9, 384, 2, 10, 0, 0, 0]
+        let someInts: CircularBuffer = [-9, 384, 2, 10, 0, 0, 0]
+        XCTAssertEqual(someInts.count, 7)
+        XCTAssert(zip(someInts, someIntsArray).allSatisfy(==))
     }
 }

@@ -26,7 +26,7 @@ final class SocketOptionProviderTest: XCTestCase {
 
     private func convertedChannel(file: StaticString = #file, line: UInt = #line) throws -> SocketOptionProvider {
         guard let provider = self.clientChannel as? SocketOptionProvider else {
-            XCTFail("Unable to cast \(String(describing: self.clientChannel)) to SocketOptionProvider", file: file, line: line)
+            XCTFail("Unable to cast \(String(describing: self.clientChannel)) to SocketOptionProvider", file: (file), line: line)
             throw CastError()
         }
         return provider
@@ -34,7 +34,7 @@ final class SocketOptionProviderTest: XCTestCase {
 
     private func ipv4MulticastProvider(file: StaticString = #file, line: UInt = #line) throws -> SocketOptionProvider {
         guard let provider = self.ipv4DatagramChannel as? SocketOptionProvider else {
-            XCTFail("Unable to cast \(String(describing: self.ipv4DatagramChannel)) to SocketOptionProvider", file: file, line: line)
+            XCTFail("Unable to cast \(String(describing: self.ipv4DatagramChannel)) to SocketOptionProvider", file: (file), line: line)
             throw CastError()
         }
         return provider
@@ -46,7 +46,7 @@ final class SocketOptionProviderTest: XCTestCase {
         }
 
         guard let provider = ipv6Channel as? SocketOptionProvider else {
-            XCTFail("Unable to cast \(ipv6Channel)) to SocketOptionChannel", file: file, line: line)
+            XCTFail("Unable to cast \(ipv6Channel)) to SocketOptionChannel", file: (file), line: line)
             throw CastError()
         }
 
@@ -100,8 +100,8 @@ final class SocketOptionProviderTest: XCTestCase {
         let provider = try assertNoThrowWithValue(self.convertedChannel())
 
         let newTimeout = timeval(tv_sec: 5, tv_usec: 0)
-        let retrievedTimeout = try assertNoThrowWithValue(provider.unsafeSetSocketOption(level: SocketOptionLevel(SOL_SOCKET), name: SO_RCVTIMEO, value: newTimeout).flatMap {
-            provider.unsafeGetSocketOption(level: SocketOptionLevel(SOL_SOCKET), name: SO_RCVTIMEO) as EventLoopFuture<timeval>
+        let retrievedTimeout = try assertNoThrowWithValue(provider.unsafeSetSocketOption(level: .socket, name: .so_rcvtimeo, value: newTimeout).flatMap {
+            provider.unsafeGetSocketOption(level: .socket, name: .so_rcvtimeo) as EventLoopFuture<timeval>
         }.wait())
 
         XCTAssertEqual(retrievedTimeout.tv_sec, newTimeout.tv_sec)
@@ -111,7 +111,7 @@ final class SocketOptionProviderTest: XCTestCase {
     func testObtainingDefaultValueOfComplexSocketOption() throws {
         let provider = try assertNoThrowWithValue(self.convertedChannel())
 
-        let retrievedTimeout: timeval = try assertNoThrowWithValue(provider.unsafeGetSocketOption(level: SocketOptionLevel(SOL_SOCKET), name: SO_RCVTIMEO).wait())
+        let retrievedTimeout: timeval = try assertNoThrowWithValue(provider.unsafeGetSocketOption(level: .socket, name: .so_rcvtimeo).wait())
         XCTAssertEqual(retrievedTimeout.tv_sec, 0)
         XCTAssertEqual(retrievedTimeout.tv_usec, 0)
     }
@@ -120,8 +120,8 @@ final class SocketOptionProviderTest: XCTestCase {
         let provider = try assertNoThrowWithValue(self.convertedChannel())
 
         let newReuseAddr = 1 as CInt
-        let retrievedReuseAddr = try assertNoThrowWithValue(provider.unsafeSetSocketOption(level: SocketOptionLevel(SOL_SOCKET), name: SO_REUSEADDR, value: newReuseAddr).flatMap {
-            provider.unsafeGetSocketOption(level: SocketOptionLevel(SOL_SOCKET), name: SO_REUSEADDR) as EventLoopFuture<CInt>
+        let retrievedReuseAddr = try assertNoThrowWithValue(provider.unsafeSetSocketOption(level: .socket, name: .so_reuseaddr, value: newReuseAddr).flatMap {
+            provider.unsafeGetSocketOption(level: .socket, name: .so_reuseaddr) as EventLoopFuture<CInt>
         }.wait())
 
         XCTAssertNotEqual(retrievedReuseAddr, 0)
@@ -130,7 +130,7 @@ final class SocketOptionProviderTest: XCTestCase {
     func testObtainingDefaultValueOfSimpleSocketOption() throws {
         let provider = try assertNoThrowWithValue(self.convertedChannel())
 
-        let reuseAddr: CInt = try assertNoThrowWithValue(provider.unsafeGetSocketOption(level: SocketOptionLevel(SOL_SOCKET), name: SO_REUSEADDR).wait())
+        let reuseAddr: CInt = try assertNoThrowWithValue(provider.unsafeGetSocketOption(level: .socket, name: .so_reuseaddr).wait())
         XCTAssertEqual(reuseAddr, 0)
     }
 
@@ -142,13 +142,8 @@ final class SocketOptionProviderTest: XCTestCase {
         // we just abandon the other tests: this is sufficient to prove that the error path works.
         let provider = try assertNoThrowWithValue(self.convertedChannel())
 
-        do {
-            try provider.unsafeSetSocketOption(level: SocketOptionLevel(SOL_SOCKET), name: SO_RCVTIMEO, value: CInt(1)).wait()
-            XCTFail("Did not throw")
-        } catch let err as IOError where err.errnoCode == EINVAL {
-            // Acceptable error
-        } catch {
-            XCTFail("Invalid error: \(error)")
+        XCTAssertThrowsError(try provider.unsafeSetSocketOption(level: .socket, name: .so_rcvtimeo, value: 1).wait()) { error in
+            XCTAssertEqual(EINVAL, (error as? IOError)?.errnoCode)
         }
     }
 

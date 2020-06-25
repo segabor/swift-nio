@@ -234,6 +234,11 @@ extension ByteToMessageDecoder {
     public func wrapInboundOut(_ value: InboundOut) -> NIOAny {
         return NIOAny(value)
     }
+    
+    public mutating func decodeLast(context: ChannelHandlerContext, buffer: inout ByteBuffer, seenEOF: Bool) throws  -> DecodingState {
+        while try self.decode(context: context, buffer: &buffer) == .continue {}
+        return .needMoreData
+    }
 }
 
 private struct B2MDBuffer {
@@ -290,7 +295,7 @@ extension B2MDBuffer {
                 return .nothingAvailable
             }
         case .ready:
-            assert(self.buffers.count == 0)
+            assert(self.buffers.isEmpty)
             if allowEmptyBuffer {
                 self.state = .processingInProgress
                 return .available(self.emptyByteBuffer)
@@ -302,7 +307,7 @@ extension B2MDBuffer {
     mutating func finishProcessing(remainder buffer: inout ByteBuffer) -> Void {
         assert(self.state == .processingInProgress)
         self.state = .ready
-        if buffer.readableBytes == 0 && self.buffers.count == 0 {
+        if buffer.readableBytes == 0 && self.buffers.isEmpty {
             // fast path, no bytes left and no other buffers, just return
             return
         }
@@ -376,9 +381,22 @@ public final class ByteToMessageHandler<Decoder: ByteToMessageDecoder> {
     }
 
     private enum RemovalState {
+        /// Not added to any `ChannelPipeline` yet.
+        case notAddedToPipeline
+
+        /// No one tried to remove this handler.
         case notBeingRemoved
+
+        /// The user-triggered removal has been started but isn't complete yet. This state will not be entered if the
+        /// removal is triggered by Channel teardown.
         case removalStarted
+
+        /// The user-triggered removal is complete. This state will not be entered if the removal is triggered by
+        /// Channel teardown.
         case removalCompleted
+
+        /// This handler has been removed from the pipeline.
+        case handlerRemovedCalled
     }
 
     private enum State {
@@ -432,7 +450,7 @@ public final class ByteToMessageHandler<Decoder: ByteToMessageDecoder> {
             assert(!self.state.isFinalState, "illegal state on state set: \(self.state)") // we can never leave final states
         }
     }
-    private var removalState: RemovalState = .notBeingRemoved
+    private var removalState: RemovalState = .notAddedToPipeline
     // sadly to construct a B2MDBuffer we need an empty ByteBuffer which we can only get from the allocator, so IUO.
     private var buffer: B2MDBuffer!
     private var seenEOF: Bool = false
@@ -454,8 +472,12 @@ public final class ByteToMessageHandler<Decoder: ByteToMessageDecoder> {
     }
 
     deinit {
-        assert(self.removalState == .removalCompleted, "illegal state in deinit: removalState = \(self.removalState)")
-        assert(self.state.isFinalState, "illegal state in deinit: state = \(self.state)")
+        if self.removalState != .notAddedToPipeline {
+            // we have been added to the pipeline, if not, we don't need to check our state.
+            assert(self.removalState == .handlerRemovedCalled,
+                   "illegal state in deinit: removalState = \(self.removalState)")
+            assert(self.state.isFinalState, "illegal state in deinit: state = \(self.state)")
+        }
     }
 }
 
@@ -576,9 +598,10 @@ extension ByteToMessageHandler {
 extension ByteToMessageHandler: ChannelInboundHandler {
 
     public func handlerAdded(context: ChannelHandlerContext) {
-        guard self.removalState == .notBeingRemoved else {
+        guard self.removalState == .notAddedToPipeline else {
             preconditionFailure("\(self) got readded to a ChannelPipeline but ByteToMessageHandler is single-use")
         }
+        self.removalState = .notBeingRemoved
         self.buffer = B2MDBuffer(emptyByteBuffer: context.channel.allocator.buffer(capacity: 0))
         // here we can force it because we know that the decoder isn't in use if we're just adding this handler
         self.selfAsCanDequeueWrites = self as? CanDequeueWrites // we need to cache this as it allocates.
@@ -589,7 +612,7 @@ extension ByteToMessageHandler: ChannelInboundHandler {
     public func handlerRemoved(context: ChannelHandlerContext) {
         // very likely, the removal state is `.notBeingRemoved` or `.removalCompleted` here but we can't assert it
         // because the pipeline might be torn down during the formal removal process.
-        self.removalState = .removalCompleted
+        self.removalState = .handlerRemovedCalled
         if !self.state.isFinalState {
             self.state = .done
         }
@@ -661,7 +684,7 @@ extension ByteToMessageHandler: ChannelOutboundHandler, _ChannelOutboundHandler 
     public func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
         if self.decoder != nil {
             let data = self.unwrapOutboundIn(data)
-            assert(self.queuedWrites.count == 0)
+            assert(self.queuedWrites.isEmpty)
             self.decoder!.write(data: data)
         } else {
             self.queuedWrites.append(data)
@@ -691,8 +714,17 @@ extension ByteToMessageHandler: RemovableChannelHandler {
         context.eventLoop.execute {
             self.processLeftovers(context: context)
             assert(!self.state.isLeftoversNeedProcessing, "illegal state: \(self.state)")
-            assert(self.removalState == .removalStarted, "illegal removal state: \(self.removalState)")
-            self.removalState = .removalCompleted
+            switch self.removalState {
+            case .removalStarted:
+                self.removalState = .removalCompleted
+            case .handlerRemovedCalled:
+                // if we're here, then the channel has also been torn down between the start and the completion of
+                // the user-triggered removal. That's okay.
+                ()
+            default:
+                assertionFailure("illegal removal state: \(self.removalState)")
+            }
+            // this is necessary as it'll complete the promise.
             context.leavePipeline(removalToken: removalToken)
         }
     }
@@ -747,6 +779,7 @@ extension MessageToByteHandler {
         case .notInChannelYet:
             preconditionFailure("MessageToByteHandler.write called before it was added to a Channel")
         case .error(let error):
+            promise?.fail(error)
             context.fireErrorCaught(error)
             return
         case .done:
@@ -764,6 +797,7 @@ extension MessageToByteHandler {
             context.write(self.wrapOutboundOut(self.buffer!), promise: promise)
         } catch {
             self.state = .error(error)
+            promise?.fail(error)
             context.fireErrorCaught(error)
         }
     }

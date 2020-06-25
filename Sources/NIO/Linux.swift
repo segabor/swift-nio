@@ -23,16 +23,16 @@ internal enum TimerFd {
 
     @inline(never)
     public static func timerfd_settime(fd: Int32, flags: Int32, newValue: UnsafePointer<itimerspec>, oldValue: UnsafeMutablePointer<itimerspec>?) throws  {
-        try wrapSyscall {
+        _ = try syscall(blocking: false) {
             CNIOLinux.timerfd_settime(fd, flags, newValue, oldValue)
         }
     }
 
     @inline(never)
     public static func timerfd_create(clockId: Int32, flags: Int32) throws -> Int32 {
-        return try wrapSyscall {
+        return try syscall(blocking: false) {
             CNIOLinux.timerfd_create(clockId, flags)
-        }
+        }.result
     }
 }
 
@@ -43,23 +43,23 @@ internal enum EventFd {
 
     @inline(never)
     public static func eventfd_write(fd: Int32, value: UInt64) throws -> Int32 {
-        return try wrapSyscall {
+        return try syscall(blocking: false) {
             CNIOLinux.eventfd_write(fd, value)
-        }
+        }.result
     }
 
     @inline(never)
     public static func eventfd_read(fd: Int32, value: UnsafeMutablePointer<UInt64>) throws -> Int32 {
-        return try wrapSyscall {
+        return try syscall(blocking: false) {
             CNIOLinux.eventfd_read(fd, value)
-        }
+        }.result
     }
 
     @inline(never)
     public static func eventfd(initval: Int32, flags: Int32) throws -> Int32 {
-        return try wrapSyscall {
+        return try syscall(blocking: false) {
             CNIOLinux.eventfd(0, Int32(EFD_CLOEXEC | EFD_NONBLOCK))
-        }
+        }.result
     }
 }
 
@@ -91,28 +91,31 @@ internal enum Epoll {
 
     @inline(never)
     public static func epoll_create(size: Int32) throws -> Int32 {
-        return try wrapSyscall {
+        return try syscall(blocking: false) {
             CNIOLinux.epoll_create(size)
-        }
+        }.result
     }
 
     @inline(never)
     @discardableResult
     public static func epoll_ctl(epfd: Int32, op: Int32, fd: Int32, event: UnsafeMutablePointer<epoll_event>) throws -> Int32 {
-        return try wrapSyscall {
+        return try syscall(blocking: false) {
             CNIOLinux.epoll_ctl(epfd, op, fd, event)
-        }
+        }.result
     }
 
     @inline(never)
     public static func epoll_wait(epfd: Int32, events: UnsafeMutablePointer<epoll_event>, maxevents: Int32, timeout: Int32) throws -> Int32 {
-        return try wrapSyscall {
+        return try syscall(blocking: false) {
             CNIOLinux.epoll_wait(epfd, events, maxevents, timeout)
-        }
+        }.result
     }
 }
 
 internal enum Linux {
+    static let cfsQuotaPath = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
+    static let cfsPeriodPath = "/sys/fs/cgroup/cpu/cpu.cfs_period_us"
+    static let cpuSetPath = "/sys/fs/cgroup/cpuset/cpuset.cpus"
 #if os(Android)
     static let SOCK_CLOEXEC = Glibc.SOCK_CLOEXEC
     static let SOCK_NONBLOCK = Glibc.SOCK_NONBLOCK
@@ -121,16 +124,65 @@ internal enum Linux {
     static let SOCK_NONBLOCK = CInt(bitPattern: Glibc.SOCK_NONBLOCK.rawValue)
 #endif
     @inline(never)
-    public static func accept4(descriptor: CInt, addr: UnsafeMutablePointer<sockaddr>, len: UnsafeMutablePointer<socklen_t>, flags: Int32) throws -> CInt? {
-        let result: IOResult<CInt> = try wrapSyscallMayBlock {
+    public static func accept4(descriptor: CInt,
+                               addr: UnsafeMutablePointer<sockaddr>?,
+                               len: UnsafeMutablePointer<socklen_t>?,
+                               flags: CInt) throws -> CInt? {
+        guard case let .processed(fd) = try syscall(blocking: true, {
             CNIOLinux.CNIOLinux_accept4(descriptor, addr, len, flags)
+        }) else {
+          return nil
         }
-        switch result {
-        case .processed(let fd):
-            return fd
-        default:
-            return nil
+        return fd
+    }
+
+    private static func firstLineOfFile(path: String) throws -> Substring {
+        let fh = try NIOFileHandle(path: path)
+        defer { try! fh.close() }
+        // linux doesn't properly report /sys/fs/cgroup/* files lengths so we use a reasonable limit
+        var buf = ByteBufferAllocator().buffer(capacity: 1024)
+        try buf.writeWithUnsafeMutableBytes(minimumWritableBytes: buf.capacity) { ptr in
+            let res = try fh.withUnsafeFileDescriptor { fd -> IOResult<ssize_t> in
+                return try Posix.read(descriptor: fd, pointer: ptr.baseAddress!, size: ptr.count)
+            }
+            switch res {
+            case .processed(let n):
+                return n
+            case .wouldBlock:
+                preconditionFailure("read returned EWOULDBLOCK despite a blocking fd")
+            }
         }
+        return String(buffer: buf).prefix(while: { $0 != "\n" })
+    }
+
+    private static func countCoreIds(cores: Substring) -> Int {
+        let ids = cores.split(separator: "-", maxSplits: 1)
+        guard
+            let first = ids.first.flatMap({ Int($0, radix: 10) }),
+            let last = ids.last.flatMap({ Int($0, radix: 10) }),
+            last >= first
+        else { preconditionFailure("cpuset format is incorrect") }
+        return 1 + last - first
+    }
+
+    static func coreCount(cpuset cpusetPath: String) -> Int? {
+        guard
+            let cpuset = try? firstLineOfFile(path: cpusetPath).split(separator: ","),
+            !cpuset.isEmpty
+        else { return nil }
+        return cpuset.map(countCoreIds).reduce(0, +)
+    }
+
+    static func coreCount(quota quotaPath: String,  period periodPath: String) -> Int? {
+        guard
+            let quota = try? Int(firstLineOfFile(path: quotaPath)),
+            quota > 0
+        else { return nil }
+        guard
+            let period = try? Int(firstLineOfFile(path: periodPath)),
+            period > 0
+        else { return nil }
+        return (quota - 1 + period) / period // always round up if fractional CPU quota requested
     }
 }
 #endif

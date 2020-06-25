@@ -36,8 +36,7 @@ private final class EchoHandler: ChannelInboundHandler {
             let remoteAddress = try self.remoteAddressInitializer()
             
             // Set the transmission data.
-            var buffer = context.channel.allocator.buffer(capacity: line.utf8.count)
-            buffer.writeString(line)
+            let buffer = context.channel.allocator.buffer(string: line)
             self.numBytes = buffer.readableBytes
             
             // Forward the data.
@@ -52,16 +51,13 @@ private final class EchoHandler: ChannelInboundHandler {
     
     public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let envelope = self.unwrapInboundIn(data)
-        var byteBuffer = envelope.data
+        let byteBuffer = envelope.data
         
         self.numBytes -= byteBuffer.readableBytes
         
         if self.numBytes <= 0 {
-            if let string = byteBuffer.readString(length: byteBuffer.readableBytes) {
-                print("Received: '\(string)' back from the server, closing channel.")
-            } else {
-                print("Received the line back from the server, closing channel.")
-            }
+            let string = String(buffer: byteBuffer)
+            print("Received: '\(string)' back from the server, closing channel.")
             context.close(promise: nil)
         }
     }
@@ -121,7 +117,7 @@ let remoteAddress = { () -> SocketAddress in
 let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 let bootstrap = DatagramBootstrap(group: group)
     // Enable SO_REUSEADDR.
-    .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+    .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
     .channelInitializer { channel in
         channel.pipeline.addHandler(EchoHandler(remoteAddressInitializer: remoteAddress))
 }

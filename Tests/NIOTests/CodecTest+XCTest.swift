@@ -24,6 +24,7 @@ import XCTest
 
 extension ByteToMessageDecoderTest {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (ByteToMessageDecoderTest) -> () throws -> Void)] {
       return [
                 ("testDecoder", testDecoder),
@@ -59,16 +60,30 @@ extension ByteToMessageDecoderTest {
                 ("testWeAreOkayWithReceivingDataAfterFullClose", testWeAreOkayWithReceivingDataAfterFullClose),
                 ("testPayloadTooLarge", testPayloadTooLarge),
                 ("testPayloadTooLargeButHandlerOk", testPayloadTooLargeButHandlerOk),
+                ("testRemoveHandlerBecauseOfChannelTearDownWhilstUserTriggeredRemovalIsInProgress", testRemoveHandlerBecauseOfChannelTearDownWhilstUserTriggeredRemovalIsInProgress),
            ]
    }
 }
 
 extension MessageToByteEncoderTest {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (MessageToByteEncoderTest) -> () throws -> Void)] {
       return [
                 ("testEncoderOverrideAllocateOutBuffer", testEncoderOverrideAllocateOutBuffer),
                 ("testEncoder", testEncoder),
+                ("testB2MHIsHappyNeverBeingAddedToAPipeline", testB2MHIsHappyNeverBeingAddedToAPipeline),
+                ("testM2BHIsHappyNeverBeingAddedToAPipeline", testM2BHIsHappyNeverBeingAddedToAPipeline),
+           ]
+   }
+}
+
+extension MessageToByteHandlerTest {
+
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
+   static var allTests : [(String, (MessageToByteHandlerTest) -> () throws -> Void)] {
+      return [
+                ("testThrowingEncoderFailsPromises", testThrowingEncoderFailsPromises),
            ]
    }
 }

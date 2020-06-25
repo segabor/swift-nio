@@ -24,13 +24,17 @@ import XCTest
 
 extension EventLoopTest {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (EventLoopTest) -> () throws -> Void)] {
       return [
                 ("testSchedule", testSchedule),
+                ("testFlatSchedule", testFlatSchedule),
                 ("testScheduleWithDelay", testScheduleWithDelay),
                 ("testScheduleCancelled", testScheduleCancelled),
+                ("testFlatScheduleCancelled", testFlatScheduleCancelled),
                 ("testScheduleRepeatedTask", testScheduleRepeatedTask),
                 ("testScheduledTaskThatIsImmediatelyCancelledNeverFires", testScheduledTaskThatIsImmediatelyCancelledNeverFires),
+                ("testFlatScheduledTaskThatIsImmediatelyCancelledNeverFires", testFlatScheduledTaskThatIsImmediatelyCancelledNeverFires),
                 ("testRepeatedTaskThatIsImmediatelyCancelledNeverFires", testRepeatedTaskThatIsImmediatelyCancelledNeverFires),
                 ("testScheduleRepeatedTaskCancelFromDifferentThread", testScheduleRepeatedTaskCancelFromDifferentThread),
                 ("testScheduleRepeatedTaskToNotRetainRepeatedTask", testScheduleRepeatedTaskToNotRetainRepeatedTask),
@@ -50,10 +54,29 @@ extension EventLoopTest {
                 ("testRepeatedTaskThatIsImmediatelyCancelledNotifies", testRepeatedTaskThatIsImmediatelyCancelledNotifies),
                 ("testRepeatedTaskThatIsCancelledAfterRunningAtLeastTwiceNotifies", testRepeatedTaskThatIsCancelledAfterRunningAtLeastTwiceNotifies),
                 ("testRepeatedTaskThatCancelsItselfNotifiesOnlyWhenFinished", testRepeatedTaskThatCancelsItselfNotifiesOnlyWhenFinished),
-                ("testAndAllCompleteWithZeroFutures", testAndAllCompleteWithZeroFutures),
-                ("testAndAllSucceedWithZeroFutures", testAndAllSucceedWithZeroFutures),
                 ("testCancelledScheduledTasksDoNotHoldOnToRunClosure", testCancelledScheduledTasksDoNotHoldOnToRunClosure),
                 ("testIllegalCloseOfEventLoopFails", testIllegalCloseOfEventLoopFails),
+                ("testSubtractingDeadlineFromPastAndFuturesDeadlinesWorks", testSubtractingDeadlineFromPastAndFuturesDeadlinesWorks),
+                ("testCallingSyncShutdownGracefullyMultipleTimesShouldNotHang", testCallingSyncShutdownGracefullyMultipleTimesShouldNotHang),
+                ("testCallingShutdownGracefullyMultipleTimesShouldExecuteAllCallbacks", testCallingShutdownGracefullyMultipleTimesShouldExecuteAllCallbacks),
+                ("testEdgeCasesNIODeadlineMinusNIODeadline", testEdgeCasesNIODeadlineMinusNIODeadline),
+                ("testEdgeCasesNIODeadlinePlusTimeAmount", testEdgeCasesNIODeadlinePlusTimeAmount),
+                ("testEdgeCasesNIODeadlineMinusTimeAmount", testEdgeCasesNIODeadlineMinusTimeAmount),
+                ("testSuccessfulFlatSubmit", testSuccessfulFlatSubmit),
+                ("testFailingFlatSubmit", testFailingFlatSubmit),
+                ("testSchedulingTaskOnTheEventLoopWithinTheEventLoopsOnlyTask", testSchedulingTaskOnTheEventLoopWithinTheEventLoopsOnlyTask),
+                ("testSchedulingTaskOnTheEventLoopWithinTheEventLoopsOnlyIOOperation", testSchedulingTaskOnTheEventLoopWithinTheEventLoopsOnlyIOOperation),
+                ("testCancellingTheLastOutstandingTask", testCancellingTheLastOutstandingTask),
+                ("testSchedulingTaskOnTheEventLoopWithinTheEventLoopsOnlyScheduledTask", testSchedulingTaskOnTheEventLoopWithinTheEventLoopsOnlyScheduledTask),
+                ("testSelectableEventLoopDescription", testSelectableEventLoopDescription),
+                ("testMultiThreadedEventLoopGroupDescription", testMultiThreadedEventLoopGroupDescription),
+                ("testSafeToExecuteTrue", testSafeToExecuteTrue),
+                ("testSafeToExecuteFalse", testSafeToExecuteFalse),
+                ("testTakeOverThreadAndAlsoTakeItBack", testTakeOverThreadAndAlsoTakeItBack),
+                ("testThreadTakeoverUnsetsCurrentEventLoop", testThreadTakeoverUnsetsCurrentEventLoop),
+                ("testWeCanDoTrulySingleThreadedNetworking", testWeCanDoTrulySingleThreadedNetworking),
+                ("testWeFailOutstandingScheduledTasksOnELShutdown", testWeFailOutstandingScheduledTasksOnELShutdown),
+                ("testSchedulingTaskOnFutureFailedByELShutdownDoesNotMakeUsExplode", testSchedulingTaskOnFutureFailedByELShutdownDoesNotMakeUsExplode),
            ]
    }
 }

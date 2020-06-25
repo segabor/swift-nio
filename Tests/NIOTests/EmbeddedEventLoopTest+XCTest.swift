@@ -24,6 +24,7 @@ import XCTest
 
 extension EmbeddedEventLoopTest {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (EmbeddedEventLoopTest) -> () throws -> Void)] {
       return [
                 ("testExecuteDoesNotImmediatelyRunTasks", testExecuteDoesNotImmediatelyRunTasks),
@@ -41,6 +42,12 @@ extension EmbeddedEventLoopTest {
                 ("testScheduledTasksFuturesError", testScheduledTasksFuturesError),
                 ("testTaskOrdering", testTaskOrdering),
                 ("testCancelledScheduledTasksDoNotHoldOnToRunClosure", testCancelledScheduledTasksDoNotHoldOnToRunClosure),
+                ("testDrainScheduledTasks", testDrainScheduledTasks),
+                ("testDrainScheduledTasksDoesNotRunNewlyScheduledTasks", testDrainScheduledTasksDoesNotRunNewlyScheduledTasks),
+                ("testAdvanceTimeToDeadline", testAdvanceTimeToDeadline),
+                ("testWeCantTimeTravelByAdvancingTimeToThePast", testWeCantTimeTravelByAdvancingTimeToThePast),
+                ("testExecuteInOrder", testExecuteInOrder),
+                ("testScheduledTasksInOrder", testScheduledTasksInOrder),
            ]
    }
 }

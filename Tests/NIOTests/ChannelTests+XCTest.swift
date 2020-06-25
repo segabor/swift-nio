@@ -24,6 +24,7 @@ import XCTest
 
 extension ChannelTests {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (ChannelTests) -> () throws -> Void)] {
       return [
                 ("testBasicLifecycle", testBasicLifecycle),
@@ -79,6 +80,9 @@ extension ChannelTests {
                 ("testUnprocessedOutboundUserEventFailsOnServerSocketChannel", testUnprocessedOutboundUserEventFailsOnServerSocketChannel),
                 ("testAcceptHandlerDoesNotSwallowCloseErrorsWhenQuiescing", testAcceptHandlerDoesNotSwallowCloseErrorsWhenQuiescing),
                 ("testTCP_NODELAYisOnByDefault", testTCP_NODELAYisOnByDefault),
+                ("testDescriptionCanBeCalledFromNonEventLoopThreads", testDescriptionCanBeCalledFromNonEventLoopThreads),
+                ("testFixedSizeRecvByteBufferAllocatorSizeIsConstant", testFixedSizeRecvByteBufferAllocatorSizeIsConstant),
+                ("testCloseInConnectPromise", testCloseInConnectPromise),
            ]
    }
 }

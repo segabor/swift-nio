@@ -25,22 +25,18 @@ private final class EchoHandler: ChannelInboundHandler {
         print("Client connected to \(context.remoteAddress!)")
         
         // We are connected. It's time to send the message to the server to initialize the ping-pong sequence.
-        var buffer = context.channel.allocator.buffer(capacity: line.utf8.count)
-        buffer.writeString(line)
+        let buffer = context.channel.allocator.buffer(string: line)
         self.numBytes = buffer.readableBytes
         context.writeAndFlush(self.wrapOutboundOut(buffer), promise: nil)
     }
 
     public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        var byteBuffer = self.unwrapInboundIn(data)
+        let byteBuffer = self.unwrapInboundIn(data)
         self.numBytes -= byteBuffer.readableBytes
 
         if self.numBytes == 0 {
-            if let string = byteBuffer.readString(length: byteBuffer.readableBytes) {
-                print("Received: '\(string)' back from the server, closing channel.")
-            } else {
-                print("Received the line back from the server, closing channel")
-            }
+            let string = String(buffer: byteBuffer)
+            print("Received: '\(string)' back from the server, closing channel.")
             context.close(promise: nil)
         }
     }
@@ -57,7 +53,7 @@ private final class EchoHandler: ChannelInboundHandler {
 let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 let bootstrap = ClientBootstrap(group: group)
     // Enable SO_REUSEADDR.
-    .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+    .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
     .channelInitializer { channel in
         channel.pipeline.addHandler(EchoHandler())
     }

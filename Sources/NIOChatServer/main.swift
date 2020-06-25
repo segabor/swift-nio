@@ -31,10 +31,6 @@ final class LineDelimiterCodec: ByteToMessageDecoder {
         }
         return .needMoreData
     }
-
-    public func decodeLast(context: ChannelHandlerContext, buffer: inout ByteBuffer, seenEOF: Bool) throws -> DecodingState {
-        return try self.decode(context: context, buffer: &buffer)
-    }
 }
 
 /// This `ChannelInboundHandler` demonstrates a few things:
@@ -103,8 +99,7 @@ final class ChatHandler: ChannelInboundHandler {
     }
 
     private func writeToAll(channels: [ObjectIdentifier: Channel], allocator: ByteBufferAllocator, message: String) {
-        var buffer =  allocator.buffer(capacity: message.utf8.count)
-        buffer.writeString(message)
+        let buffer =  allocator.buffer(string: message)
         self.writeToAll(channels: channels, buffer: buffer)
     }
 
@@ -121,7 +116,7 @@ let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 let bootstrap = ServerBootstrap(group: group)
     // Specify backlog and enable SO_REUSEADDR for the server itself
     .serverChannelOption(ChannelOptions.backlog, value: 256)
-    .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+    .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
     // Set the handlers that are applied to the accepted Channels
     .childChannelInitializer { channel in
@@ -133,7 +128,7 @@ let bootstrap = ServerBootstrap(group: group)
     }
 
     // Enable SO_REUSEADDR for the accepted Channels
-    .childChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+    .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
     .childChannelOption(ChannelOptions.maxMessagesPerRead, value: 16)
     .childChannelOption(ChannelOptions.recvAllocator, value: AdaptiveRecvByteBufferAllocator())
 defer {

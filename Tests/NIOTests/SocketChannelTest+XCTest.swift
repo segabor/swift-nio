@@ -24,6 +24,7 @@ import XCTest
 
 extension SocketChannelTest {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (SocketChannelTest) -> () throws -> Void)] {
       return [
                 ("testAsyncSetOption", testAsyncSetOption),
@@ -50,6 +51,9 @@ extension SocketChannelTest {
                 ("testUnprocessedOutboundUserEventFailsOnSocketChannel", testUnprocessedOutboundUserEventFailsOnSocketChannel),
                 ("testSetSockOptDoesNotOverrideExistingFlags", testSetSockOptDoesNotOverrideExistingFlags),
                 ("testServerChannelDoesNotBreakIfAcceptingFailsWithEINVAL", testServerChannelDoesNotBreakIfAcceptingFailsWithEINVAL),
+                ("testWeAreInterestedInReadEOFWhenChannelIsConnectedOnTheServerSide", testWeAreInterestedInReadEOFWhenChannelIsConnectedOnTheServerSide),
+                ("testWeAreInterestedInReadEOFWhenChannelIsConnectedOnTheClientSide", testWeAreInterestedInReadEOFWhenChannelIsConnectedOnTheClientSide),
+                ("testServerClosesTheConnectionImmediately", testServerClosesTheConnectionImmediately),
            ]
    }
 }

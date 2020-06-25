@@ -414,7 +414,7 @@ public final class ByteToMessageDecoderTest: XCTestCase {
             String(decoding: $0.readableBytesView, as: Unicode.UTF8.self)
         }))
         XCTAssertNoThrow(XCTAssertEqual("56", try channel.readInbound(as: ByteBuffer.self).map {
-        String(decoding: $0.readableBytesView, as: Unicode.UTF8.self)
+            String(decoding: $0.readableBytesView, as: Unicode.UTF8.self)
         }))
         XCTAssertNoThrow(XCTAssertEqual("78", try channel.readInbound(as: ByteBuffer.self).map {
             String(decoding: $0.readableBytesView, as: Unicode.UTF8.self)
@@ -483,7 +483,7 @@ public final class ByteToMessageDecoderTest: XCTestCase {
             var state: Int = 1
 
             mutating func decode(context: ChannelHandlerContext, buffer: inout ByteBuffer) throws -> DecodingState {
-                if let slice = buffer.readSlice(length: self.state) {
+                if buffer.readSlice(length: self.state) != nil {
                     defer {
                         self.state += 1
                     }
@@ -1452,6 +1452,66 @@ public final class ByteToMessageDecoderTest: XCTestCase {
         XCTAssertNoThrow(XCTAssertTrue(try channel.finish().isClean))
         XCTAssertGreaterThan(decoder.decodeCalls, 0)
     }
+
+    func testRemoveHandlerBecauseOfChannelTearDownWhilstUserTriggeredRemovalIsInProgress() {
+        class Decoder: ByteToMessageDecoder {
+            typealias InboundOut = Never
+
+            var removedCalls = 0
+
+            func decode(context: ChannelHandlerContext, buffer: inout ByteBuffer) throws -> DecodingState {
+                XCTFail("\(#function) should never have been called")
+                return .needMoreData
+            }
+
+            func decodeLast(context: ChannelHandlerContext, buffer: inout ByteBuffer, seenEOF: Bool) throws -> DecodingState {
+                XCTAssertEqual(0, buffer.readableBytes)
+                XCTAssertTrue(seenEOF)
+                return .needMoreData
+            }
+
+            func decoderRemoved(context: ChannelHandlerContext) {
+                self.removedCalls += 1
+                XCTAssertEqual(1, self.removedCalls)
+            }
+        }
+
+        let decoder = Decoder()
+        let decoderHandler = ByteToMessageHandler(decoder)
+        let channel = EmbeddedChannel(handler: decoderHandler)
+
+        XCTAssertNoThrow(try channel.connect(to: .init(ipAddress: "1.2.3.4", port: 5)).wait())
+
+        // We are now trying to get the channel into the following states (ordered by time):
+        // 1. user-triggered removal is in progress (started but not completed)
+        // 2. `removeHandlers()` as part of the Channel teardown is called
+        // 3. user-triggered removal completes
+        //
+        // The way we can get into this situation might be slightly counter-intuitive but currently, the easiest way
+        // to trigger this is:
+        // 1. `channel.close()` (because `removeHandlers()` is called inside an `eventLoop.execute` so is delayed
+        // 2. user-triggered removal start (`channel.pipeline.removeHandler`) which will also use an
+        //    `eventLoop.execute` to ask for the handler to actually be removed.
+        // 3. run the event loop (this will now first call `removeHandlers()` which completes the channel tear down
+        //    and a little later will complete the user-triggered removal.
+
+        let closeFuture = channel.close() // close the channel, `removeHandlers` will be called in next EL tick.
+
+        // user-trigger the handelr removal (the actual removal will be done on the next EL tick too)
+        let removalFuture = channel.pipeline.removeHandler(decoderHandler)
+
+        // run the event loop, this will make `removeHandlers` run first because it was enqueued before the
+        // user-triggered handler removal
+        channel.embeddedEventLoop.run()
+
+        // just to make sure everything has completed.
+        XCTAssertNoThrow(try closeFuture.wait())
+        XCTAssertNoThrow(try removalFuture.wait())
+
+        XCTAssertThrowsError(try channel.finish()) { error in
+            XCTAssertEqual(ChannelError.alreadyClosed, error as? ChannelError)
+        }
+    }
 }
 
 public final class MessageToByteEncoderTest: XCTestCase {
@@ -1485,9 +1545,9 @@ public final class MessageToByteEncoderTest: XCTestCase {
         let channel = EmbeddedChannel()
 
         XCTAssertNoThrow(try channel.pipeline.addHandler(MessageToByteHandler(Int32ToByteEncoder())).wait(),
-                         file: file, line: line)
+                         file: (file), line: line)
 
-        XCTAssertNoThrow(try channel.writeAndFlush(NIOAny(Int32(5))).wait(), file: file, line: line)
+        XCTAssertNoThrow(try channel.writeAndFlush(NIOAny(Int32(5))).wait(), file: (file), line: line)
 
         if var buffer = try channel.readOutbound(as: ByteBuffer.self) {
             XCTAssertEqual(Int32(5), buffer.readInteger())
@@ -1497,8 +1557,44 @@ public final class MessageToByteEncoderTest: XCTestCase {
         }
 
         XCTAssertTrue(try channel.finish().isClean)
-
     }
+
+    func testB2MHIsHappyNeverBeingAddedToAPipeline() {
+        @inline(never)
+        func createAndReleaseIt() {
+            struct Decoder: ByteToMessageDecoder {
+                typealias InboundOut = Never
+
+                func decode(context: ChannelHandlerContext, buffer: inout ByteBuffer) throws -> DecodingState {
+                    XCTFail()
+                    return .needMoreData
+                }
+
+                func decodeLast(context: ChannelHandlerContext, buffer: inout ByteBuffer, seenEOF: Bool) throws -> DecodingState {
+                    XCTFail()
+                    return .needMoreData
+                }
+            }
+            _ = ByteToMessageHandler(Decoder())
+        }
+        createAndReleaseIt()
+    }
+
+    func testM2BHIsHappyNeverBeingAddedToAPipeline() {
+        @inline(never)
+        func createAndReleaseIt() {
+            struct Encoder: MessageToByteEncoder {
+                typealias OutboundIn = Void
+
+                func encode(data: Void, out: inout ByteBuffer) throws {
+                    XCTFail()
+                }
+            }
+            _ = MessageToByteHandler(Encoder())
+        }
+        createAndReleaseIt()
+    }
+
 }
 
 private class PairOfBytesDecoder: ByteToMessageDecoder {
@@ -1525,5 +1621,33 @@ private class PairOfBytesDecoder: ByteToMessageDecoder {
         XCTAssertEqual(1, self.decodeLastCalls)
         self.lastPromise.succeed(buffer)
         return .needMoreData
+    }
+}
+
+public final class MessageToByteHandlerTest: XCTestCase {
+    private struct ThrowingMessageToByteEncoder: MessageToByteEncoder {
+        private struct HandlerError: Error { }
+        
+        typealias OutboundIn = Int
+
+        public func encode(data value: Int, out: inout ByteBuffer) throws {
+            if value == 0 {
+                out.writeInteger(value)
+            } else {
+                throw HandlerError()
+            }
+        }
+    }
+    
+    func testThrowingEncoderFailsPromises() {
+        let channel = EmbeddedChannel()
+        
+        XCTAssertNoThrow(try channel.pipeline.addHandler(MessageToByteHandler(ThrowingMessageToByteEncoder())).wait())
+        
+        XCTAssertNoThrow(try channel.writeAndFlush(0).wait())
+        
+        XCTAssertThrowsError(try channel.writeAndFlush(1).wait())
+        
+        XCTAssertThrowsError(try channel.writeAndFlush(0).wait())
     }
 }

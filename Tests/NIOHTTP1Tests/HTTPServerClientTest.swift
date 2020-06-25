@@ -62,14 +62,9 @@ internal class ArrayAccumulationHandler<T>: ChannelInboundHandler {
 
 class HTTPServerClientTest : XCTestCase {
     /* needs to be something reasonably large and odd so it has good odds producing incomplete writes even on the loopback interface */
-    private static let massiveResponseLength = 5 * 1024 * 1024 + 7
+    private static let massiveResponseLength = 1 * 1024 * 1024 + 7
     private static let massiveResponseBytes: [UInt8] = {
-        var bytes: [UInt8] = []
-        bytes.reserveCapacity(HTTPServerClientTest.massiveResponseLength)
-        for f in 0..<HTTPServerClientTest.massiveResponseLength {
-            bytes.append(UInt8(f % 255))
-        }
-        return bytes
+        return Array(repeating: 0xff, count: HTTPServerClientTest.massiveResponseLength)
     }()
 
     enum SendMode {
@@ -191,13 +186,7 @@ class HTTPServerClientTest : XCTestCase {
 
                 case "/massive-response":
                     var buf = context.channel.allocator.buffer(capacity: HTTPServerClientTest.massiveResponseLength)
-                    buf.writeWithUnsafeMutableBytes { targetPtr in
-                        return HTTPServerClientTest.massiveResponseBytes.withUnsafeBytes { srcPtr in
-                            precondition(targetPtr.count >= srcPtr.count)
-                            targetPtr.copyMemory(from: srcPtr)
-                            return srcPtr.count
-                        }
-                    }
+                    buf.reserveCapacity(HTTPServerClientTest.massiveResponseLength)
                     buf.writeBytes(HTTPServerClientTest.massiveResponseBytes)
                     var head = HTTPResponseHead(version: req.version, status: .ok)
                     head.headers.add(name: "Connection", value: "close")
@@ -347,10 +336,9 @@ class HTTPServerClientTest : XCTestCase {
         let expectedHeaders = maybeExpectedHeaders ?? HTTPHeaders([("content-length", "14"), ("connection", "close")])
         let accumulation = HTTPClientResponsePartAssertHandler(httpVersion, .ok, expectedHeaders, "Hello World!\r\n")
 
-        let numBytes = 16 * 1024
         let httpHandler = SimpleHTTPServer(mode)
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
             // Set the handlers that are appled to the accepted Channels
             .childChannelInitializer { channel in
@@ -405,10 +393,9 @@ class HTTPServerClientTest : XCTestCase {
 
         let accumulation = HTTPClientResponsePartAssertHandler(HTTPVersion(major: 1, minor: 1), .ok, expectedHeaders, "12345678910")
 
-        let numBytes = 16 * 1024
         let httpHandler = SimpleHTTPServer(mode)
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
             // Set the handlers that are appled to the accepted Channels
             .childChannelInitializer { channel in
@@ -466,10 +453,9 @@ class HTTPServerClientTest : XCTestCase {
 
         let accumulation = HTTPClientResponsePartAssertHandler(HTTPVersion(major: 1, minor: 1), .ok, expectedHeaders, "12345678910", expectedTrailers)
 
-        let numBytes = 16 * 1024
         let httpHandler = SimpleHTTPServer(mode)
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.configureHTTPServerPipeline(withPipeliningAssistance: false).flatMap {
                     channel.pipeline.addHandler(httpHandler)
@@ -525,7 +511,7 @@ class HTTPServerClientTest : XCTestCase {
         let numBytes = 16 * 1024
         let httpHandler = SimpleHTTPServer(mode)
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
             // Set the handlers that are appled to the accepted Channels
             .childChannelInitializer { channel in
@@ -565,10 +551,9 @@ class HTTPServerClientTest : XCTestCase {
 
         let accumulation = HTTPClientResponsePartAssertHandler(HTTPVersion(major: 1, minor: 1), .ok, expectedHeaders, "")
 
-        let numBytes = 16 * 1024
         let httpHandler = SimpleHTTPServer(.byteBuffer)
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.configureHTTPServerPipeline(withPipeliningAssistance: false).flatMap {
                     channel.pipeline.addHandler(httpHandler)
@@ -610,10 +595,9 @@ class HTTPServerClientTest : XCTestCase {
 
         let accumulation = HTTPClientResponsePartAssertHandler(HTTPVersion(major: 1, minor: 1), .noContent, expectedHeaders, "")
 
-        let numBytes = 16 * 1024
         let httpHandler = SimpleHTTPServer(.byteBuffer)
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.configureHTTPServerPipeline(withPipeliningAssistance: false).flatMap {
                     channel.pipeline.addHandler(httpHandler)

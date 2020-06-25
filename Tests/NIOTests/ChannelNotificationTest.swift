@@ -19,9 +19,9 @@ class ChannelNotificationTest: XCTestCase {
 
     private static func assertFulfilled(promise: EventLoopPromise<Void>?, promiseName: String, trigger: String, setter: String, file: StaticString = #file, line: UInt = #line) {
         if let promise = promise {
-            XCTAssertTrue(promise.futureResult.isFulfilled, "\(promiseName) not fulfilled before \(trigger) was called", file: file, line: line)
+            XCTAssertTrue(promise.futureResult.isFulfilled, "\(promiseName) not fulfilled before \(trigger) was called", file: (file), line: line)
         } else {
-            XCTFail("\(setter) not called before \(trigger)", file: file, line: line)
+            XCTFail("\(setter) not called before \(trigger)", file: (file), line: line)
         }
     }
 
@@ -294,7 +294,7 @@ class ChannelNotificationTest: XCTestCase {
         let acceptedChannelPromise = group.next().makePromise(of: Channel.self)
 
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .serverChannelInitializer { channel in
                 channel.pipeline.addHandler(ServerSocketChannelLifecycleVerificationHandler())
             }
@@ -376,7 +376,7 @@ class ChannelNotificationTest: XCTestCase {
 
         let promise = group.next().makePromise(of: Void.self)
         let serverChannel = try assertNoThrowWithValue(ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelOption(ChannelOptions.autoRead, value: true)
             .childChannelInitializer { channel in
                 channel.pipeline.addHandler(OrderVerificationHandler(promise))

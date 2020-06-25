@@ -198,6 +198,22 @@ extension ByteBuffer {
         }
         return self.setBytes(data, at: index)
     }
+
+    public init(data: Data) {
+        self = ByteBufferAllocator().buffer(data: data)
+    }
+}
+
+extension ByteBufferAllocator {
+    /// Create a fresh `ByteBuffer` containing the bytes contained in the given `Data`.
+    ///
+    /// This will allocate a new `ByteBuffer` with enough space to fit the bytes of the `Data` and potentially
+    /// some extra space using Swift's default allocator.
+    public func buffer(data: Data) -> ByteBuffer {
+        var buffer = self.buffer(capacity: data.count)
+        buffer.writeBytes(data)
+        return buffer
+    }
 }
 
 // MARK: - Conformances
@@ -209,4 +225,18 @@ extension ByteBufferView: DataProtocol {
     public var regions: CollectionOfOne<ByteBufferView> {
         return .init(self)
     }
+}
+
+extension ByteBufferView: MutableDataProtocol {}
+
+// MARK: - Data
+extension Data {
+    
+    /// Creates a `Data` from a given `ByteBuffer`. The entire readable portion of the buffer will be read.
+    /// - parameter buffer: The buffer to read.
+    public init(buffer: ByteBuffer, byteTransferStrategy: ByteBuffer.ByteTransferStrategy = .automatic) {
+        var buffer = buffer
+        self = buffer.readData(length: buffer.readableBytes, byteTransferStrategy: byteTransferStrategy)!
+    }
+    
 }

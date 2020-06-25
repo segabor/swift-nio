@@ -24,6 +24,7 @@ import XCTest
 
 extension HTTPServerUpgradeTestCase {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (HTTPServerUpgradeTestCase) -> () throws -> Void)] {
       return [
                 ("testUpgradeWithoutUpgrade", testUpgradeWithoutUpgrade),
@@ -45,6 +46,9 @@ extension HTTPServerUpgradeTestCase {
                 ("testDelayedUpgradeResponseDeliversFullRequestAndPendingBits", testDelayedUpgradeResponseDeliversFullRequestAndPendingBits),
                 ("testRemovesAllHTTPRelatedHandlersAfterUpgrade", testRemovesAllHTTPRelatedHandlersAfterUpgrade),
                 ("testUpgradeWithUpgradePayloadInlineWithRequestWorks", testUpgradeWithUpgradePayloadInlineWithRequestWorks),
+                ("testDeliversBytesWhenRemovedDuringPartialUpgrade", testDeliversBytesWhenRemovedDuringPartialUpgrade),
+                ("testDeliversBytesWhenReentrantlyCalledInChannelReadCompleteOnRemoval", testDeliversBytesWhenReentrantlyCalledInChannelReadCompleteOnRemoval),
+                ("testWeTolerateUpgradeFuturesFromWrongEventLoops", testWeTolerateUpgradeFuturesFromWrongEventLoops),
            ]
    }
 }

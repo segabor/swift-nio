@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+import NIOConcurrencyHelpers
+
 /// A Registration on a `Selector`, which is interested in an `SelectorEventSet`.
 protocol Registration {
     /// The `SelectorEventSet` in which the `Registration` is interested.
@@ -24,10 +26,10 @@ protocol SockAddrProtocol {
 }
 
 /// Returns a description for the given address.
-internal func descriptionForAddress(family: CInt, bytes: UnsafeRawPointer, length byteCount: Int) throws -> String {
+internal func descriptionForAddress(family: NIOBSDSocket.AddressFamily, bytes: UnsafeRawPointer, length byteCount: Int) throws -> String {
     var addressBytes: [Int8] = Array(repeating: 0, count: byteCount)
     return try addressBytes.withUnsafeMutableBufferPointer { (addressBytesPtr: inout UnsafeMutableBufferPointer<Int8>) -> String in
-        try Posix.inet_ntop(addressFamily: family,
+        try Posix.inet_ntop(addressFamily: sa_family_t(family.rawValue),
                             addressBytes: bytes,
                             addressDescription: addressBytesPtr.baseAddress!,
                             addressDescriptionLength: socklen_t(byteCount))
@@ -41,16 +43,16 @@ internal func descriptionForAddress(family: CInt, bytes: UnsafeRawPointer, lengt
 extension UnsafeMutablePointer where Pointee == sockaddr {
     /// Converts the `sockaddr` to a `SocketAddress`.
     func convert() -> SocketAddress? {
-        switch pointee.sa_family {
-        case Posix.AF_INET:
+        switch NIOBSDSocket.AddressFamily(rawValue: CInt(pointee.sa_family)) {
+        case .inet:
             return self.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
                 SocketAddress($0.pointee, host: $0.pointee.addressDescription())
             }
-        case Posix.AF_INET6:
+        case .inet6:
             return self.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
                 SocketAddress($0.pointee, host: $0.pointee.addressDescription())
             }
-        case Posix.AF_UNIX:
+        case .unix:
             return self.withMemoryRebound(to: sockaddr_un.self, capacity: 1) {
                 SocketAddress($0.pointee)
             }
@@ -79,7 +81,7 @@ extension sockaddr_in: SockAddrProtocol {
     mutating func addressDescription() -> String {
         return withUnsafePointer(to: &self.sin_addr) { addrPtr in
             // this uses inet_ntop which is documented to only fail if family is not AF_INET or AF_INET6 (or ENOSPC)
-            try! descriptionForAddress(family: AF_INET, bytes: addrPtr, length: Int(INET_ADDRSTRLEN))
+            try! descriptionForAddress(family: .inet, bytes: addrPtr, length: Int(INET_ADDRSTRLEN))
         }
     }
 }
@@ -103,7 +105,7 @@ extension sockaddr_in6: SockAddrProtocol {
     mutating func addressDescription() -> String {
         return withUnsafePointer(to: &self.sin6_addr) { addrPtr in
             // this uses inet_ntop which is documented to only fail if family is not AF_INET or AF_INET6 (or ENOSPC)
-            try! descriptionForAddress(family: AF_INET6, bytes: addrPtr, length: Int(INET6_ADDRSTRLEN))
+            try! descriptionForAddress(family: .inet6, bytes: addrPtr, length: Int(INET6_ADDRSTRLEN))
         }
     }
 }
@@ -152,7 +154,7 @@ extension sockaddr_storage {
     ///
     /// This will crash if `ss_family` != AF_INET!
     mutating func convert() -> sockaddr_in {
-        precondition(self.ss_family == AF_INET)
+        precondition(self.ss_family == NIOBSDSocket.AddressFamily.inet.rawValue)
         return withUnsafePointer(to: &self) {
             $0.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
                 $0.pointee
@@ -164,7 +166,7 @@ extension sockaddr_storage {
     ///
     /// This will crash if `ss_family` != AF_INET6!
     mutating func convert() -> sockaddr_in6 {
-        precondition(self.ss_family == AF_INET6)
+        precondition(self.ss_family == NIOBSDSocket.AddressFamily.inet6.rawValue)
         return withUnsafePointer(to: &self) {
             $0.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
                 $0.pointee
@@ -176,7 +178,7 @@ extension sockaddr_storage {
     ///
     /// This will crash if `ss_family` != AF_UNIX!
     mutating func convert() -> sockaddr_un {
-        precondition(self.ss_family == AF_UNIX)
+        precondition(self.ss_family == NIOBSDSocket.AddressFamily.unix.rawValue)
         return withUnsafePointer(to: &self) {
             $0.withMemoryRebound(to: sockaddr_un.self, capacity: 1) {
                 $0.pointee
@@ -186,14 +188,14 @@ extension sockaddr_storage {
 
     /// Converts the `socketaddr_storage` to a `SocketAddress`.
     mutating func convert() -> SocketAddress {
-        switch self.ss_family {
-        case Posix.AF_INET:
+        switch NIOBSDSocket.AddressFamily(rawValue: CInt(self.ss_family)) {
+        case .inet:
             var sockAddr: sockaddr_in = self.convert()
             return SocketAddress(sockAddr, host: sockAddr.addressDescription())
-        case Posix.AF_INET6:
+        case .inet6:
             var sockAddr: sockaddr_in6 = self.convert()
             return SocketAddress(sockAddr, host: sockAddr.addressDescription())
-        case Posix.AF_UNIX:
+        case .unix:
             return SocketAddress(self.convert() as sockaddr_un)
         default:
             fatalError("unknown sockaddr family \(self.ss_family)")
@@ -204,25 +206,19 @@ extension sockaddr_storage {
 /// Base class for sockets.
 ///
 /// This should not be created directly but one of its sub-classes should be used, like `ServerSocket` or `Socket`.
-class BaseSocket: Selectable {
+class BaseSocket: BaseSocketProtocol {
+    typealias SelectableType = BaseSocket
 
     private var descriptor: CInt
     public var isOpen: Bool {
         return descriptor >= 0
     }
 
-    func withUnsafeFileDescriptor<T>(_ body: (CInt) throws -> T) throws -> T {
-        guard self.isOpen else {
-            throw IOError(errnoCode: EBADF, reason: "file descriptor already closed!")
-        }
-        return try body(descriptor)
-    }
-
     /// Returns the local bound `SocketAddress` of the socket.
     ///
     /// - returns: The local bound address.
     /// - throws: An `IOError` if the retrieval of the address failed.
-    final func localAddress() throws -> SocketAddress {
+    func localAddress() throws -> SocketAddress {
         return try get_addr { try Posix.getsockname(socket: $0, address: $1, addressLength: $2) }
     }
 
@@ -230,7 +226,7 @@ class BaseSocket: Selectable {
     ///
     /// - returns: The connected address.
     /// - throws: An `IOError` if the retrieval of the address failed.
-    final func remoteAddress() throws -> SocketAddress {
+    func remoteAddress() throws -> SocketAddress {
         return try get_addr { try Posix.getpeername(socket: $0, address: $1, addressLength: $2) }
     }
 
@@ -241,25 +237,11 @@ class BaseSocket: Selectable {
         try addr.withMutableSockAddr { addressPtr, size in
             var size = socklen_t(size)
 
-            try withUnsafeFileDescriptor { fd in
-                try body(fd, addressPtr, &size)
+            try self.withUnsafeHandle {
+                try body($0, addressPtr, &size)
             }
         }
         return addr.convert()
-    }
-
-    private static func setNonBlocking(fileDescriptor: CInt) throws {
-        let flags = try Posix.fcntl(descriptor: fileDescriptor, command: F_GETFL, value: 0)
-        do {
-            let ret = try Posix.fcntl(descriptor: fileDescriptor, command: F_SETFL, value: flags | O_NONBLOCK)
-            assert(ret == 0, "unexpectedly, fcntl(\(fileDescriptor), F_SETFL, \(flags) | O_NONBLOCK) returned \(ret)")
-        } catch let error as IOError {
-            if error.errnoCode == EINVAL {
-                // Darwin seems to sometimes do this despite the docs claiming it can't happen
-                throw NIOFailedToSetSocketNonBlockingError()
-            }
-            throw error
-        }
     }
 
     /// Create a new socket and return the file descriptor of it.
@@ -270,20 +252,20 @@ class BaseSocket: Selectable {
     ///     - setNonBlocking: Set non-blocking mode on the socket.
     /// - returns: the file descriptor of the socket that was created.
     /// - throws: An `IOError` if creation of the socket failed.
-    static func makeSocket(protocolFamily: Int32, type: CInt, setNonBlocking: Bool = false) throws -> Int32 {
-        var sockType = type
+    static func makeSocket(protocolFamily: NIOBSDSocket.ProtocolFamily, type: NIOBSDSocket.SocketType, setNonBlocking: Bool = false) throws -> CInt {
+        var sockType: CInt = type.rawValue
         #if os(Linux)
         if setNonBlocking {
-            sockType = type | Linux.SOCK_NONBLOCK
+            sockType = type.rawValue | Linux.SOCK_NONBLOCK
         }
         #endif
         let sock = try Posix.socket(domain: protocolFamily,
-                                    type: sockType,
+                                    type: NIOBSDSocket.SocketType(rawValue: sockType),
                                     protocol: 0)
         #if !os(Linux)
         if setNonBlocking {
             do {
-                try BaseSocket.setNonBlocking(fileDescriptor: sock)
+                try Posix.setNonBlocking(socket: sock)
             } catch {
                 // best effort close
                 try? Posix.close(descriptor: sock)
@@ -291,10 +273,10 @@ class BaseSocket: Selectable {
             }
         }
         #endif
-        if protocolFamily == AF_INET6 {
+        if protocolFamily == .inet6 {
             var zero: Int32 = 0
             do {
-                try Posix.setsockopt(socket: sock, level: Int32(IPPROTO_IPV6), optionName: IPV6_V6ONLY, optionValue: &zero, optionLen: socklen_t(MemoryLayout.size(ofValue: zero)))
+                try Posix.setsockopt(socket: sock, level: NIOBSDSocket.OptionLevel.ipv6.rawValue, optionName: NIOBSDSocket.Option.ipv6_v6only.rawValue, optionValue: &zero, optionLen: socklen_t(MemoryLayout.size(ofValue: zero)))
             } catch let e as IOError {
                 if e.errnoCode != EAFNOSUPPORT {
                     // Ignore error that may be thrown by close.
@@ -316,13 +298,23 @@ class BaseSocket: Selectable {
     ///
     /// - parameters:
     ///     - descriptor: The file descriptor to wrap.
-    init(descriptor: CInt) {
+    init(descriptor: CInt) throws {
         precondition(descriptor >= 0, "invalid file descriptor")
         self.descriptor = descriptor
+        do {
+            try self.ignoreSIGPIPE()
+        } catch {
+            self.descriptor = -1 // We have to unset the fd here, otherwise we'll crash with "leaking open BaseSocket"
+            throw error
+        }
     }
 
     deinit {
         assert(!self.isOpen, "leak of open BaseSocket")
+    }
+
+    func ignoreSIGPIPE() throws {
+        try BaseSocket.ignoreSIGPIPE(descriptor: self.descriptor)
     }
 
     /// Set the socket as non-blocking.
@@ -331,8 +323,8 @@ class BaseSocket: Selectable {
     ///
     /// throws: An `IOError` if the operation failed.
     final func setNonBlocking() throws {
-        return try withUnsafeFileDescriptor { fd in
-            try BaseSocket.setNonBlocking(fileDescriptor: fd)
+        return try self.withUnsafeHandle {
+            try Posix.setNonBlocking(socket: $0)
         }
     }
 
@@ -345,19 +337,19 @@ class BaseSocket: Selectable {
     ///     - name: The name of the option to set.
     ///     - value: The value for the option.
     /// - throws: An `IOError` if the operation failed.
-    final func setOption<T>(level: Int32, name: Int32, value: T) throws {
-        if level == SocketOptionValue(IPPROTO_TCP) && name == TCP_NODELAY && (try? self.localAddress().protocolFamily) == Optional<Int32>.some(Int32(Posix.AF_UNIX)) {
+    func setOption<T>(level: NIOBSDSocket.OptionLevel, name: NIOBSDSocket.Option, value: T) throws {
+        if level == .tcp && name == .tcp_nodelay && (try? self.localAddress().protocol) == Optional<NIOBSDSocket.ProtocolFamily>.some(.unix) {
             // setting TCP_NODELAY on UNIX domain sockets will fail. Previously we had a bug where we would ignore
             // most socket options settings so for the time being we'll just ignore this. Let's revisit for NIO 2.0.
             return
         }
-        return try withUnsafeFileDescriptor { fd in
+        return try self.withUnsafeHandle {
             var val = value
 
             try Posix.setsockopt(
-                socket: fd,
-                level: level,
-                optionName: name,
+                socket: $0,
+                level: level.rawValue,
+                optionName: name.rawValue,
                 optionValue: &val,
                 optionLen: socklen_t(MemoryLayout.size(ofValue: val)))
         }
@@ -371,21 +363,21 @@ class BaseSocket: Selectable {
     ///     - level: The protocol level (see `man getsockopt`).
     ///     - name: The name of the option to set.
     /// - throws: An `IOError` if the operation failed.
-    final func getOption<T>(level: Int32, name: Int32) throws -> T {
-        return try withUnsafeFileDescriptor { fd in
+    final func getOption<T>(level: NIOBSDSocket.OptionLevel, name: NIOBSDSocket.Option) throws -> T {
+        return try self.withUnsafeHandle { fd in
             var length = socklen_t(MemoryLayout<T>.size)
             let storage = UnsafeMutableRawBufferPointer.allocate(byteCount: MemoryLayout<T>.stride,
                                                                  alignment: MemoryLayout<T>.alignment)
             // write zeroes into the memory as Linux's getsockopt doesn't zero them out
             storage.initializeMemory(as: UInt8.self, repeating: 0)
-            var val = storage.bindMemory(to: T.self).baseAddress!
+            let val = storage.bindMemory(to: T.self).baseAddress!
             // initialisation will be done by getsockopt
             defer {
                 val.deinitialize(count: 1)
                 storage.deallocate()
             }
 
-            try Posix.getsockopt(socket: fd, level: level, optionName: name, optionValue: val, optionLen: &length)
+            try Posix.getsockopt(socket: fd, level: level.rawValue, optionName: name.rawValue, optionValue: val, optionLen: &length)
             return val.pointee
         }
     }
@@ -395,8 +387,8 @@ class BaseSocket: Selectable {
     /// - parameters:
     ///     - address: The `SocketAddress` to which the socket should be bound.
     /// - throws: An `IOError` if the operation failed.
-    final func bind(to address: SocketAddress) throws {
-        try withUnsafeFileDescriptor { fd in
+    func bind(to address: SocketAddress) throws {
+        try self.withUnsafeHandle { fd in
             func doBind(ptr: UnsafePointer<sockaddr>, bytes: Int) throws {
                 try Posix.bind(descriptor: fd, ptr: ptr, bytes: bytes)
             }
@@ -404,13 +396,13 @@ class BaseSocket: Selectable {
             switch address {
             case .v4(let address):
                 var addr = address.address
-                try addr.withSockAddr(doBind)
+                try addr.withSockAddr({ try doBind(ptr: $0, bytes: $1) })
             case .v6(let address):
                 var addr = address.address
-                try addr.withSockAddr(doBind)
+                try addr.withSockAddr({ try doBind(ptr: $0, bytes: $1) })
             case .unixDomainSocket(let address):
                 var addr = address.address
-                try addr.withSockAddr(doBind)
+                try addr.withSockAddr({ try doBind(ptr: $0, bytes: $1) })
             }
         }
     }
@@ -421,16 +413,34 @@ class BaseSocket: Selectable {
     ///
     /// - throws: An `IOError` if the operation failed.
     func close() throws {
-        try withUnsafeFileDescriptor { fd in
-            try Posix.close(descriptor: fd)
-        }
+        try Posix.close(descriptor: try self.takeDescriptorOwnership())
+    }
 
-        self.descriptor = -1
+    /// Takes the file descriptor's ownership.
+    ///
+    /// After this call, `BaseSocket` considers itself to be closed and the caller is responsible for actually closing
+    /// the underlying file descriptor.
+    ///
+    /// - throws: An `IOError` if the operation failed.
+    final func takeDescriptorOwnership() throws -> CInt {
+        return try self.withUnsafeHandle {
+            self.descriptor = -1
+            return $0
+        }
+    }
+}
+
+extension BaseSocket: Selectable {
+    func withUnsafeHandle<T>(_ body: (CInt) throws -> T) throws -> T {
+        guard self.isOpen else {
+            throw IOError(errnoCode: EBADF, reason: "file descriptor already closed!")
+        }
+        return try body(self.descriptor)
     }
 }
 
 extension BaseSocket: CustomStringConvertible {
     var description: String {
-        return "BaseSocket { fd=\(self.descriptor) } "
+        return "BaseSocket { fd=\(self.descriptor) }"
     }
 }

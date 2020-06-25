@@ -22,9 +22,7 @@ public enum ByteToMessageDecoderVerifier {
                                                                     decoderFactory: @escaping () -> Decoder) throws where Decoder.InboundOut: Equatable {
         let alloc = ByteBufferAllocator()
         let ioPairs = stringInputOutputPairs.map { (ioPair: (String, [Decoder.InboundOut])) -> (ByteBuffer, [Decoder.InboundOut]) in
-            var buffer = alloc.buffer(capacity: ioPair.0.utf8.count)
-            buffer.writeString(ioPair.0)
-            return (buffer, ioPair.1)
+            return (alloc.buffer(string: ioPair.0), ioPair.1)
         }
         return try ByteToMessageDecoderVerifier.verifyDecoder(inputOutputPairs: ioPairs, decoderFactory: decoderFactory)
     }
@@ -47,8 +45,8 @@ public enum ByteToMessageDecoderVerifier {
     ///     exampleInput1.writeString("example-in1")
     ///     var exampleInput2 = channel.allocator.buffer(capacity: 16)
     ///     exampleInput2.writeString("example-in2")
-    ///     let expectedInOuts = [(exampleInput1, ExampleDecoderOutput("1")),
-    ///                           (exampleInput2, ExampleDecoderOutput("2"))
+    ///     let expectedInOuts = [(exampleInput1, [ExampleDecoderOutput("1")]),
+    ///                           (exampleInput2, [ExampleDecoderOutput("2")])
     ///                          ]
     ///     XCTAssertNoThrow(try ByteToMessageDecoderVerifier.verifyDecoder(inputOutputPairs: expectedInOuts,
     ///                                                                     decoderFactory: { ExampleDecoder() }))

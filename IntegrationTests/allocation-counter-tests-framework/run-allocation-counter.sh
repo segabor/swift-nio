@@ -24,8 +24,10 @@ function die() {
 
 function make_git_commit_all() {
     git init > /dev/null
-    git config --local user.email does@really-not.matter
-    git config --local user.name 'Does Not Matter'
+    if [[ "$(git config user.email)" == "" ]]; then
+        git config --local user.email does@really-not.matter
+        git config --local user.name 'Does Not Matter'
+    fi
     git add . > /dev/null
     git commit -m 'everything' > /dev/null
 }
@@ -101,7 +103,7 @@ function dir_basename() {
 
 function fake_package_swift() {
     cat > Package.swift <<EOF
-// swift-tools-version:4.0
+// swift-tools-version:5.0
 import PackageDescription
 
 let package = Package(name: "$1")

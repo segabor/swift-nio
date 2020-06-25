@@ -134,8 +134,8 @@
 ///
 /// A `ChannelHandler` can be added or removed at any time because a `ChannelPipeline` is thread safe.
 public final class ChannelPipeline: ChannelInvoker {
-    private var head: ChannelHandlerContext?
-    private var tail: ChannelHandlerContext?
+    private var head: Optional<ChannelHandlerContext>
+    private var tail: Optional<ChannelHandlerContext>
 
     private var idx: Int = 0
     internal private(set) var destroyed: Bool = false
@@ -146,7 +146,7 @@ public final class ChannelPipeline: ChannelInvoker {
     /// The `Channel` that this `ChannelPipeline` belongs to.
     ///
     /// - note: This will be nil after the channel has closed
-    private var _channel: Channel?
+    private var _channel: Optional<Channel>
 
     /// The `Channel` that this `ChannelPipeline` belongs to.
     internal var channel: Channel {
@@ -396,15 +396,19 @@ public final class ChannelPipeline: ChannelInvoker {
     ///     - context: the `ChannelHandlerContext` that belongs to `ChannelHandler` that should be removed.
     ///     - promise: An `EventLoopPromise` that will complete when the `ChannelHandler` is removed.
     public func removeHandler(context: ChannelHandlerContext, promise: EventLoopPromise<Void>?) {
-        guard let handler = context.handler as? RemovableChannelHandler else {
+        guard context.handler is RemovableChannelHandler else {
             promise?.fail(ChannelError.unremovableHandler)
             return
         }
+        func removeHandler0() {
+            context.startUserTriggeredRemoval(promise: promise)
+        }
+
         if self.eventLoop.inEventLoop {
-            handler.removeHandler(context: context, removalToken: .init(promise: promise))
+            removeHandler0()
         } else {
             self.eventLoop.execute {
-                handler.removeHandler(context: context, removalToken: .init(promise: promise))
+                removeHandler0()
             }
         }
     }
@@ -488,6 +492,7 @@ public final class ChannelPipeline: ChannelInvoker {
 
         let nextCtx = context.next
         let prevCtx = context.prev
+
         if let prevCtx = prevCtx {
             prevCtx.next = nextCtx
         }
@@ -863,6 +868,8 @@ public final class ChannelPipeline: ChannelInvoker {
     public init(channel: Channel) {
         self._channel = channel
         self.eventLoop = channel.eventLoop
+        self.head = nil // we need to initialise these to `nil` so we can use `self` in the lines below
+        self.tail = nil // we need to initialise these to `nil` so we can use `self` in the lines below
 
         self.head = ChannelHandlerContext(name: HeadChannelHandler.name, handler: HeadChannelHandler.sharedInstance, pipeline: self)
         self.tail = ChannelHandlerContext(name: TailChannelHandler.name, handler: TailChannelHandler.sharedInstance, pipeline: self)
@@ -1052,8 +1059,8 @@ public enum ChannelPipelineError: Error {
 /// `ChannelHandler`.
 public final class ChannelHandlerContext: ChannelInvoker {
     // visible for ChannelPipeline to modify
-    fileprivate var next: ChannelHandlerContext?
-    fileprivate var prev: ChannelHandlerContext?
+    fileprivate var next: Optional<ChannelHandlerContext>
+    fileprivate var prev: Optional<ChannelHandlerContext>
 
     public let pipeline: ChannelPipeline
 
@@ -1098,6 +1105,8 @@ public final class ChannelHandlerContext: ChannelInvoker {
     public let name: String
     private let inboundHandler: _ChannelInboundHandler?
     private let outboundHandler: _ChannelOutboundHandler?
+    private var removeHandlerInvoked = false
+    private var userTriggeredRemovalStarted = false
 
     // Only created from within ChannelPipeline
     fileprivate init(name: String, handler: ChannelHandler, pipeline: ChannelPipeline) {
@@ -1105,6 +1114,8 @@ public final class ChannelHandlerContext: ChannelInvoker {
         self.pipeline = pipeline
         self.inboundHandler = handler as? _ChannelInboundHandler
         self.outboundHandler = handler as? _ChannelOutboundHandler
+        self.next = nil
+        self.prev = nil
         precondition(self.inboundHandler != nil || self.outboundHandler != nil, "ChannelHandlers need to either be inbound or outbound")
     }
 
@@ -1373,7 +1384,6 @@ public final class ChannelHandlerContext: ChannelInvoker {
 
     fileprivate func invokeRegister(promise: EventLoopPromise<Void>?) {
         self.eventLoop.assertInEventLoop()
-        assert(promise.map { !$0.futureResult.isFulfilled } ?? true, "Promise \(promise!) already fulfilled")
 
         if let outboundHandler = self.outboundHandler {
             outboundHandler.register(context: self, promise: promise)
@@ -1384,7 +1394,6 @@ public final class ChannelHandlerContext: ChannelInvoker {
 
    fileprivate func invokeBind(to address: SocketAddress, promise: EventLoopPromise<Void>?) {
         self.eventLoop.assertInEventLoop()
-        assert(promise.map { !$0.futureResult.isFulfilled } ?? true, "Promise \(promise!) already fulfilled")
 
         if let outboundHandler = self.outboundHandler {
             outboundHandler.bind(context: self, to: address, promise: promise)
@@ -1395,7 +1404,6 @@ public final class ChannelHandlerContext: ChannelInvoker {
 
     fileprivate func invokeConnect(to address: SocketAddress, promise: EventLoopPromise<Void>?) {
         self.eventLoop.assertInEventLoop()
-        assert(promise.map { !$0.futureResult.isFulfilled } ?? true, "Promise \(promise!) already fulfilled")
 
         if let outboundHandler = self.outboundHandler {
             outboundHandler.connect(context: self, to: address, promise: promise)
@@ -1406,7 +1414,6 @@ public final class ChannelHandlerContext: ChannelInvoker {
 
     fileprivate func invokeWrite(_ data: NIOAny, promise: EventLoopPromise<Void>?) {
         self.eventLoop.assertInEventLoop()
-        assert(promise.map { !$0.futureResult.isFulfilled } ?? true, "Promise \(promise!) already fulfilled")
 
         if let outboundHandler = self.outboundHandler {
             outboundHandler.write(context: self, data: data, promise: promise)
@@ -1427,7 +1434,6 @@ public final class ChannelHandlerContext: ChannelInvoker {
 
     fileprivate func invokeWriteAndFlush(_ data: NIOAny, promise: EventLoopPromise<Void>?) {
         self.eventLoop.assertInEventLoop()
-        assert(promise.map { !$0.futureResult.isFulfilled } ?? true, "Promise \(promise!) already fulfilled")
 
         if let outboundHandler = self.outboundHandler {
             outboundHandler.write(context: self, data: data, promise: promise)
@@ -1449,7 +1455,6 @@ public final class ChannelHandlerContext: ChannelInvoker {
 
     fileprivate func invokeClose(mode: CloseMode, promise: EventLoopPromise<Void>?) {
         self.eventLoop.assertInEventLoop()
-        assert(promise.map { !$0.futureResult.isFulfilled } ?? true, "Promise \(promise!) already fulfilled")
 
         if let outboundHandler = self.outboundHandler {
             outboundHandler.close(context: self, mode: mode, promise: promise)
@@ -1460,7 +1465,6 @@ public final class ChannelHandlerContext: ChannelInvoker {
 
     fileprivate func invokeTriggerUserOutboundEvent(_ event: Any, promise: EventLoopPromise<Void>?) {
         self.eventLoop.assertInEventLoop()
-        assert(promise.map { !$0.futureResult.isFulfilled } ?? true, "Promise \(promise!) already fulfilled")
 
         if let outboundHandler = self.outboundHandler {
             outboundHandler.triggerUserOutboundEvent(context: self, event: event, promise: promise)
@@ -1477,6 +1481,10 @@ public final class ChannelHandlerContext: ChannelInvoker {
 
     fileprivate func invokeHandlerRemoved() throws {
         self.eventLoop.assertInEventLoop()
+        guard !self.removeHandlerInvoked else {
+            return
+        }
+        self.removeHandlerInvoked = true
 
         handler.handlerRemoved(context: self)
     }
@@ -1500,6 +1508,17 @@ extension ChannelHandlerContext {
     public func leavePipeline(removalToken: RemovalToken) {
         self.eventLoop.preconditionInEventLoop()
         self.pipeline.removeHandlerFromPipeline(context: self, promise: removalToken.promise)
+    }
+
+    internal func startUserTriggeredRemoval(promise: EventLoopPromise<Void>?) {
+        self.eventLoop.assertInEventLoop()
+        guard !self.userTriggeredRemovalStarted else {
+            promise?.fail(NIOAttemptedToRemoveHandlerMultipleTimesError())
+            return
+        }
+        self.userTriggeredRemovalStarted = true
+        (self.handler as! RemovableChannelHandler).removeHandler(context: self,
+                                                                 removalToken: .init(promise: promise))
     }
 }
 

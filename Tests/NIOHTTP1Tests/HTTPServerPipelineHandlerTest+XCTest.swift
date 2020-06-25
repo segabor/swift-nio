@@ -24,6 +24,7 @@ import XCTest
 
 extension HTTPServerPipelineHandlerTest {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (HTTPServerPipelineHandlerTest) -> () throws -> Void)] {
       return [
                 ("testBasicBufferingBehaviour", testBasicBufferingBehaviour),
@@ -45,6 +46,11 @@ extension HTTPServerPipelineHandlerTest {
                 ("testQuiescingAfterHavingReceivedOneRequestButBeforeResponseWasSentWithMoreRequestsInTheBuffer", testQuiescingAfterHavingReceivedOneRequestButBeforeResponseWasSentWithMoreRequestsInTheBuffer),
                 ("testParserErrorOnly", testParserErrorOnly),
                 ("testLegitRequestFollowedByParserErrorArrivingWhilstResponseOutstanding", testLegitRequestFollowedByParserErrorArrivingWhilstResponseOutstanding),
+                ("testRemovingWithResponseOutstandingTriggersRead", testRemovingWithResponseOutstandingTriggersRead),
+                ("testRemovingWithPartialResponseOutstandingTriggersRead", testRemovingWithPartialResponseOutstandingTriggersRead),
+                ("testRemovingWithBufferedRequestForwards", testRemovingWithBufferedRequestForwards),
+                ("testQuiescingInAResponseThenRemovedFiresEventAndReads", testQuiescingInAResponseThenRemovedFiresEventAndReads),
+                ("testQuiescingInAResponseThenRemovedFiresEventAndDoesntRead", testQuiescingInAResponseThenRemovedFiresEventAndDoesntRead),
            ]
    }
 }

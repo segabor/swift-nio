@@ -20,10 +20,38 @@ import Darwin
 import Glibc
 #endif
 
+func waitForThreadsToQuiesce(shouldReachZero: Bool) {
+    func getUnfreed() -> Int {
+        return AtomicCounter.read_malloc_counter() - AtomicCounter.read_free_counter()
+    }
+
+    var oldNumberOfUnfreed = getUnfreed()
+    var count = 0
+    repeat {
+        guard count < 100 else {
+            print("WARNING: Giving up, shouldReachZero=\(shouldReachZero), unfreeds=\(oldNumberOfUnfreed)")
+            return
+        }
+        count += 1
+        usleep(shouldReachZero ? 50_000 : 200_000) // allocs/frees happen on multiple threads, allow some cool down time
+        let newNumberOfUnfreed = getUnfreed()
+        if oldNumberOfUnfreed == newNumberOfUnfreed && (!shouldReachZero || newNumberOfUnfreed <= 0) {
+            // nothing happened in the last 100ms, let's assume everything's
+            // calmed down already.
+            if count > 5 || newNumberOfUnfreed != 0 {
+                print("DEBUG: After waiting \(count) times, we quiesced to unfreeds=\(newNumberOfUnfreed)")
+            }
+            return
+        }
+        oldNumberOfUnfreed = newNumberOfUnfreed
+    } while true
+}
+
 func measureAll(_ fn: () -> Int) -> [[String: Int]] {
-    func measureOne(_ fn: () -> Int) -> [String: Int] {
+    func measureOne(throwAway: Bool = false, _ fn: () -> Int) -> [String: Int]? {
         AtomicCounter.reset_free_counter()
         AtomicCounter.reset_malloc_counter()
+        AtomicCounter.reset_malloc_bytes_counter()
 #if os(macOS) || os(iOS) || os(watchOS) || os(tvOS)
         autoreleasepool {
             _ = fn()
@@ -31,18 +59,28 @@ func measureAll(_ fn: () -> Int) -> [[String: Int]] {
 #else
         _ = fn()
 #endif
-        usleep(100_000) // allocs/frees happen on multiple threads, allow some cool down time
+        waitForThreadsToQuiesce(shouldReachZero: !throwAway)
         let frees = AtomicCounter.read_free_counter()
         let mallocs = AtomicCounter.read_malloc_counter()
-        return ["total_allocations": mallocs,
-                "remaining_allocations": mallocs - frees]
+        let mallocedBytes = AtomicCounter.read_malloc_bytes_counter()
+        if mallocs - frees < 0 {
+            print("WARNING: negative remaining allocation count, skipping.")
+            return nil
+        }
+        return [
+            "total_allocations": mallocs,
+            "total_allocated_bytes": mallocedBytes,
+            "remaining_allocations": mallocs - frees
+        ]
     }
 
-    _ = measureOne(fn) /* pre-heat and throw away */
-    usleep(100_000) // allocs/frees happen on multiple threads, allow some cool down time
+    _ = measureOne(throwAway: true, fn) /* pre-heat and throw away */
+
     var measurements: [[String: Int]] = []
     for _ in 0..<10 {
-        measurements.append(measureOne(fn))
+        if let results = measureOne(fn) {
+            measurements.append(results)
+        }
     }
     return measurements
 }

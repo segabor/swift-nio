@@ -17,18 +17,16 @@ import XCTest
 
 private extension SocketAddress {
     init(_ addr: UnsafePointer<sockaddr>) {
-        let family = addr.pointee.sa_family
-
-        switch family {
-        case sa_family_t(AF_UNIX):
+        switch NIOBSDSocket.AddressFamily(rawValue: CInt(addr.pointee.sa_family)) {
+        case .unix:
             self = addr.withMemoryRebound(to: sockaddr_un.self, capacity: 1) {
                 SocketAddress($0.pointee)
             }
-        case sa_family_t(AF_INET):
+        case .inet:
             self = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
                 SocketAddress($0.pointee, host: "")
             }
-        case sa_family_t(AF_INET6):
+        case .inet6:
             self = addr.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
                 SocketAddress($0.pointee, host: "")
             }
@@ -121,9 +119,9 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                 if let expected = expectedSingleWritabilities {
                     if expected.count > singleState {
                         XCTAssertGreaterThan(returns.count, everythingState)
-                        XCTAssertEqual(expected[singleState].0, buf.count, "in single write \(singleState) (overall \(everythingState)), \(expected[singleState].0) bytes expected but \(buf.count) actual", file: file, line: line)
-                        XCTAssertEqual(expected[singleState].1, SocketAddress(addr), "in single write \(singleState) (overall \(everythingState)), \(expected[singleState].1) address expected but \(SocketAddress(addr)) received", file: file, line: line)
-                        XCTAssertEqual(expected[singleState].1.expectedSize, len, "in single write \(singleState) (overall \(everythingState)), \(expected[singleState].1.expectedSize) socklen expected but \(len) received", file: file, line: line)
+                        XCTAssertEqual(expected[singleState].0, buf.count, "in single write \(singleState) (overall \(everythingState)), \(expected[singleState].0) bytes expected but \(buf.count) actual", file: (file), line: line)
+                        XCTAssertEqual(expected[singleState].1, SocketAddress(addr), "in single write \(singleState) (overall \(everythingState)), \(expected[singleState].1) address expected but \(SocketAddress(addr)) received", file: (file), line: line)
+                        XCTAssertEqual(expected[singleState].1.expectedSize, len, "in single write \(singleState) (overall \(everythingState)), \(expected[singleState].1.expectedSize) socklen expected but \(len) received", file: (file), line: line)
 
                         switch returns[everythingState] {
                         case .success(let r):
@@ -132,11 +130,11 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                             throw e
                         }
                     } else {
-                        XCTFail("single write call \(singleState) but less than \(expected.count) expected", file: file, line: line)
+                        XCTFail("single write call \(singleState) but less than \(expected.count) expected", file: (file), line: line)
                         return IOResult.wouldBlock(-1 * (everythingState + 1))
                     }
                 } else {
-                    XCTFail("single write called on \(buf) but no single writes expected", file: file, line: line)
+                    XCTFail("single write called on \(buf) but no single writes expected", file: (file), line: line)
                     return IOResult.wouldBlock(-1 * (everythingState + 1))
                 }
             }, vectorWriteOperation: { ptrs in
@@ -147,17 +145,17 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                 if let expected = expectedVectorWritabilities {
                     if expected.count > multiState {
                         XCTAssertGreaterThan(returns.count, everythingState)
-                        XCTAssertEqual(ptrs.map { $0.msg_hdr.msg_iovlen }, Array(repeating: 1, count: ptrs.count), "mustn't write more than one iovec element per datagram", file: file, line: line)
+                        XCTAssertEqual(ptrs.map { $0.msg_hdr.msg_iovlen }, Array(repeating: 1, count: ptrs.count), "mustn't write more than one iovec element per datagram", file: (file), line: line)
                         XCTAssertEqual(expected[multiState].map { numericCast($0.0) }, ptrs.map { $0.msg_hdr.msg_iov.pointee.iov_len },
                                        "in vector write \(multiState) (overall \(everythingState)), \(expected[multiState]) byte counts expected but \(ptrs.map { $0.msg_hdr.msg_iov.pointee.iov_len }) actual",
-                                       file: file, line: line)
+                                       file: (file), line: line)
                         XCTAssertEqual(expected[multiState].map { $0.0 }, ptrs.map { Int($0.msg_len) },
                                        "in vector write \(multiState) (overall \(everythingState)), \(expected[multiState]) byte counts expected but \(ptrs.map { $0.msg_len }) actual",
-                            file: file, line: line)
+                            file: (file), line: line)
                         XCTAssertEqual(expected[multiState].map { $0.1 }, ptrs.map { SocketAddress($0.msg_hdr.msg_name.assumingMemoryBound(to: sockaddr.self)) }, "in vector write \(multiState) (overall \(everythingState)), \(expected[multiState].map { $0.1 }) addresses expected but \(ptrs.map { SocketAddress($0.msg_hdr.msg_name.assumingMemoryBound(to: sockaddr.self)) }) actual",
-                            file: file, line: line)
+                            file: (file), line: line)
                         XCTAssertEqual(expected[multiState].map { $0.1.expectedSize }, ptrs.map { $0.msg_hdr.msg_namelen }, "in vector write \(multiState) (overall \(everythingState)), \(expected[multiState].map { $0.1.expectedSize }) address lengths expected but \(ptrs.map { $0.msg_hdr.msg_namelen }) actual",
-                            file:file, line: line)
+                            file: (file), line: line)
 
                         switch returns[everythingState] {
                         case .success(let r):
@@ -166,16 +164,16 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                             throw e
                         }
                     } else {
-                        XCTFail("vector write call \(multiState) but less than \(expected.count) expected", file: file, line: line)
+                        XCTFail("vector write call \(multiState) but less than \(expected.count) expected", file: (file), line: line)
                         return IOResult.wouldBlock(-1 * (everythingState + 1))
                     }
                 } else {
                     XCTFail("vector write called on \(ptrs) but no vector writes expected",
-                        file: file, line: line)
+                        file: (file), line: line)
                     return IOResult.wouldBlock(-1 * (everythingState + 1))
                 }
             })
-            result = r.writeResult
+            result = r
         } catch {
             err = error
         }
@@ -183,31 +181,31 @@ class PendingDatagramWritesManagerTests: XCTestCase {
         if everythingState > 0 {
             XCTAssertEqual(promises.count, promiseStates[everythingState - 1].count,
                            "number of promises (\(promises.count)) != number of promise states (\(promiseStates[everythingState - 1].count))",
-                file: file, line: line)
+                file: (file), line: line)
             _ = zip(promises, promiseStates[everythingState - 1]).map { p, pState in
-                XCTAssertEqual(p.futureResult.isFulfilled, pState, "promise states incorrect (\(everythingState) callbacks)", file: file, line: line)
+                XCTAssertEqual(p.futureResult.isFulfilled, pState, "promise states incorrect (\(everythingState) callbacks)", file: (file), line: line)
             }
 
             XCTAssertEqual(everythingState, singleState + multiState,
-                           "odd, calls the single/vector writes: \(singleState)/\(multiState)/ but overall \(everythingState+1)", file: file, line: line)
+                           "odd, calls the single/vector writes: \(singleState)/\(multiState)/ but overall \(everythingState+1)", file: (file), line: line)
 
             if singleState == 0 {
-                XCTAssertNil(expectedSingleWritabilities, "no single writes have been done but we expected some", file: file, line: line)
+                XCTAssertNil(expectedSingleWritabilities, "no single writes have been done but we expected some", file: (file), line: line)
             } else {
-                XCTAssertEqual(singleState, (expectedSingleWritabilities?.count ?? Int.min), "different number of single writes than expected", file: file, line: line)
+                XCTAssertEqual(singleState, (expectedSingleWritabilities?.count ?? Int.min), "different number of single writes than expected", file: (file), line: line)
             }
             if multiState == 0 {
                 XCTAssertNil(expectedVectorWritabilities, "no vector writes have been done but we expected some")
             } else {
-                XCTAssertEqual(multiState, (expectedVectorWritabilities?.count ?? Int.min), "different number of vector writes than expected", file: file, line: line)
+                XCTAssertEqual(multiState, (expectedVectorWritabilities?.count ?? Int.min), "different number of vector writes than expected", file: (file), line: line)
             }
         } else {
-            XCTAssertEqual(0, returns.count, "no callbacks called but apparently \(returns.count) expected", file: file, line: line)
-            XCTAssertNil(expectedSingleWritabilities, "no callbacks called but apparently some single writes expected", file: file, line: line)
-            XCTAssertNil(expectedVectorWritabilities, "no callbacks calles but apparently some vector writes expected", file: file, line: line)
+            XCTAssertEqual(0, returns.count, "no callbacks called but apparently \(returns.count) expected", file: (file), line: line)
+            XCTAssertNil(expectedSingleWritabilities, "no callbacks called but apparently some single writes expected", file: (file), line: line)
+            XCTAssertNil(expectedVectorWritabilities, "no callbacks calles but apparently some vector writes expected", file: (file), line: line)
 
             _ = zip(promises, promiseStates[0]).map { p, pState in
-                XCTAssertEqual(p.futureResult.isFulfilled, pState, "promise states incorrect (no callbacks)", file: file, line: line)
+                XCTAssertEqual(p.futureResult.isFulfilled, pState, "promise states incorrect (no callbacks)", file: (file), line: line)
             }
         }
 
@@ -248,7 +246,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
 
             XCTAssertFalse(pwm.isEmpty)
             XCTAssertFalse(pwm.isFlushPending)
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
 
             result = try assertExpectedWritability(pendingWritesManager: pwm,
                                                    promises: ps,
@@ -256,7 +254,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                    expectedVectorWritabilities: nil,
                                                    returns: [],
                                                    promiseStates: [[true, false]])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
 
             pwm.markFlushCheckpoint()
 
@@ -266,7 +264,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                    expectedVectorWritabilities: nil,
                                                    returns: [.success(.processed(0))],
                                                    promiseStates: [[true, true]])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
         }
     }
 
@@ -293,7 +291,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                        expectedVectorWritabilities: [[(4, firstAddress), (4, secondAddress)]],
                                                        returns: [.success(.processed(2))],
                                                        promiseStates: [[true, true, false]])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
 
             pwm.markFlushCheckpoint()
 
@@ -303,7 +301,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                    expectedVectorWritabilities: nil,
                                                    returns: [.success(.processed(0))],
                                                    promiseStates: [[true, true, true]])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
         }
     }
 
@@ -334,7 +332,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                        returns: [.success(.processed(1)), .success(.wouldBlock(0))],
                                                        promiseStates: [[true, false, false, false], [true, false, false, false]])
 
-            XCTAssertEqual(.couldNotWriteEverything, result)
+            XCTAssertEqual(.couldNotWriteEverything, result.writeResult)
             result = try assertExpectedWritability(pendingWritesManager: pwm,
                                                    promises: ps,
                                                    expectedSingleWritabilities: [(4, secondAddress)],
@@ -345,7 +343,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                    promiseStates: [[true, true, true, false], [true, true, true, false]]
 
             )
-            XCTAssertEqual(.couldNotWriteEverything, result)
+            XCTAssertEqual(.couldNotWriteEverything, result.writeResult)
 
             result = try assertExpectedWritability(pendingWritesManager: pwm,
                                                    promises: ps,
@@ -353,7 +351,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                    expectedVectorWritabilities: nil,
                                                    returns: [.success(.processed(4))],
                                                    promiseStates: [[true, true, true, true]])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
         }
     }
 
@@ -383,7 +381,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                        expectedVectorWritabilities: Array(actualVectorWritabilities),
                                                        returns: Array(repeating: .success(.processed(1)), count: ps.count - 1),
                                                        promiseStates: actualPromiseStates)
-            XCTAssertEqual(.couldNotWriteEverything, result)
+            XCTAssertEqual(.couldNotWriteEverything, result.writeResult)
 
             /* we'll now write the one last datagram and assert that all the writes are complete */
             result = try assertExpectedWritability(pendingWritesManager: pwm,
@@ -392,7 +390,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                    expectedVectorWritabilities: nil,
                                                    returns: [.success(.processed(12))],
                                                    promiseStates: [Array(repeating: true, count: ps.count - 1) + [true]])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
         }
     }
 
@@ -417,7 +415,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                        expectedVectorWritabilities: [[(4, address), (4, address)]],
                                                        returns: [.success(.wouldBlock(0))],
                                                        promiseStates: [[false, false, false], [false, false, false]])
-            XCTAssertEqual(.couldNotWriteEverything, result)
+            XCTAssertEqual(.couldNotWriteEverything, result.writeResult)
 
             pwm.failAll(error: ChannelError.operationUnsupported, close: true)
 
@@ -453,7 +451,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                        expectedVectorWritabilities: [[(halfTheWriteVLimit, address), (halfTheWriteVLimit, address)]],
                                                        returns: [.success(.processed(2)), .success(.processed(1))],
                                                        promiseStates: [[true, true, false], [true, true, true]])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
         }
     }
 
@@ -496,7 +494,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                             .success(.processed(1))],
                                                        promiseStates: [[true, false, false], [true, true, false], [true, true, true]])
 
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
 
             XCTAssertNoThrow(try ps[1].futureResult.wait())
             XCTAssertNoThrow(try ps[2].futureResult.wait())
@@ -531,7 +529,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                        expectedVectorWritabilities: [[(0, address), (0, address)]],
                                                        returns: [.success(.processed(2))],
                                                        promiseStates: [[true, true, false]])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
 
             pwm.markFlushCheckpoint()
 
@@ -541,7 +539,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                    expectedVectorWritabilities: nil,
                                                    returns: [.success(.processed(0))],
                                                    promiseStates: [[true, true, true]])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
         }
     }
 
@@ -569,7 +567,7 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                        expectedVectorWritabilities: [[(4, address), (4, address)]],
                                                        returns: [.success(.processed(1))],
                                                        promiseStates: [[true, true, true]])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
             XCTAssertNoThrow(try ps[0].futureResult.wait())
             XCTAssertThrowsError(try ps[1].futureResult.wait())
             XCTAssertThrowsError(try ps[2].futureResult.wait())
@@ -597,14 +595,14 @@ class PendingDatagramWritesManagerTests: XCTestCase {
                                                        returns: [.success(.processed(Socket.writevLimitIOVectors)), .success(.wouldBlock(0))],
                                                        promiseStates: [Array(repeating: true, count: Socket.writevLimitIOVectors) + [false],
                                                                        Array(repeating: true, count: Socket.writevLimitIOVectors) + [false]])
-            XCTAssertEqual(.couldNotWriteEverything, result)
+            XCTAssertEqual(.couldNotWriteEverything, result.writeResult)
             result = try assertExpectedWritability(pendingWritesManager: pwm,
                                                    promises: ps,
                                                    expectedSingleWritabilities: [(4, address)],
                                                    expectedVectorWritabilities: nil,
                                                    returns: [.success(.processed(4))],
                                                    promiseStates: [Array(repeating: true, count: Socket.writevLimitIOVectors + 1)])
-            XCTAssertEqual(.writtenCompletely, result)
+            XCTAssertEqual(.writtenCompletely, result.writeResult)
         }
     }
 }

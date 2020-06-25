@@ -12,10 +12,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-private extension ByteBuffer {
+extension ByteBuffer {
     mutating func withMutableWritePointer(body: (UnsafeMutableRawBufferPointer) throws -> IOResult<Int>) rethrows -> IOResult<Int> {
         var singleResult: IOResult<Int>!
-        _ = try self.writeWithUnsafeMutableBytes { ptr in
+        _ = try self.writeWithUnsafeMutableBytes(minimumWritableBytes: 0) { ptr in
             let localWriteResult = try body(ptr)
             singleResult = localWriteResult
             switch localWriteResult {
@@ -32,42 +32,21 @@ private extension ByteBuffer {
 /// A `Channel` for a client socket.
 ///
 /// - note: All operations on `SocketChannel` are thread-safe.
-final class SocketChannel: BaseSocketChannel<Socket> {
-
+final class SocketChannel: BaseStreamSocketChannel<Socket> {
     private var connectTimeout: TimeAmount? = nil
-    private var connectTimeoutScheduled: Scheduled<Void>?
-    private var allowRemoteHalfClosure: Bool = false
-    private var inputShutdown: Bool = false
-    private var outputShutdown: Bool = false
 
-    private let pendingWrites: PendingStreamWritesManager
-
-    // This is `Channel` API so must be thread-safe.
-    override public var isWritable: Bool {
-        return pendingWrites.isWritable
-    }
-
-    override var isOpen: Bool {
-        self.eventLoop.assertInEventLoop()
-        assert(super.isOpen == self.pendingWrites.isOpen)
-        return super.isOpen
-    }
-
-    init(eventLoop: SelectableEventLoop, protocolFamily: Int32) throws {
-        let socket = try Socket(protocolFamily: protocolFamily, type: Posix.SOCK_STREAM, setNonBlocking: true)
-        self.pendingWrites = PendingStreamWritesManager(iovecs: eventLoop.iovecs, storageRefs: eventLoop.storageRefs)
-        try super.init(socket: socket, eventLoop: eventLoop, recvAllocator: AdaptiveRecvByteBufferAllocator())
+    init(eventLoop: SelectableEventLoop, protocolFamily: NIOBSDSocket.ProtocolFamily) throws {
+        let socket = try Socket(protocolFamily: protocolFamily, type: .stream, setNonBlocking: true)
+        try super.init(socket: socket, parent: nil, eventLoop: eventLoop, recvAllocator: AdaptiveRecvByteBufferAllocator())
     }
 
     init(eventLoop: SelectableEventLoop, descriptor: CInt) throws {
         let socket = try Socket(descriptor: descriptor, setNonBlocking: true)
-        self.pendingWrites = PendingStreamWritesManager(iovecs: eventLoop.iovecs, storageRefs: eventLoop.storageRefs)
-        try super.init(socket: socket, eventLoop: eventLoop, recvAllocator: AdaptiveRecvByteBufferAllocator())
+        try super.init(socket: socket, parent: nil, eventLoop: eventLoop, recvAllocator: AdaptiveRecvByteBufferAllocator())
     }
 
-    deinit {
-        // We should never have any pending writes left as otherwise we may leak callbacks
-        assert(pendingWrites.isEmpty)
+    init(socket: Socket, parent: Channel? = nil, eventLoop: SelectableEventLoop) throws {
+        try super.init(socket: socket, parent: parent, eventLoop: eventLoop, recvAllocator: AdaptiveRecvByteBufferAllocator())
     }
 
     override func setOption0<Option: ChannelOption>(_ option: Option, value: Option.Value) throws {
@@ -78,14 +57,8 @@ final class SocketChannel: BaseSocketChannel<Socket> {
         }
 
         switch option {
-        case _ as ConnectTimeoutOption:
+        case _ as ChannelOptions.Types.ConnectTimeoutOption:
             connectTimeout = value as? TimeAmount
-        case _ as AllowRemoteHalfClosureOption:
-            allowRemoteHalfClosure = value as! Bool
-        case _ as WriteSpinOption:
-            pendingWrites.writeSpinCount = value as! UInt
-        case _ as WriteBufferWaterMarkOption:
-            pendingWrites.waterMark = value as! WriteBufferWaterMark
         default:
             try super.setOption0(option, value: value)
         }
@@ -99,99 +72,15 @@ final class SocketChannel: BaseSocketChannel<Socket> {
         }
 
         switch option {
-        case _ as ConnectTimeoutOption:
+        case _ as ChannelOptions.Types.ConnectTimeoutOption:
             return connectTimeout as! Option.Value
-        case _ as AllowRemoteHalfClosureOption:
-            return allowRemoteHalfClosure as! Option.Value
-        case _ as WriteSpinOption:
-            return pendingWrites.writeSpinCount as! Option.Value
-        case _ as WriteBufferWaterMarkOption:
-            return pendingWrites.waterMark as! Option.Value
         default:
             return try super.getOption0(option)
         }
     }
 
-    override func registrationFor(interested: SelectorEventSet) -> NIORegistration {
+    func registrationFor(interested: SelectorEventSet) -> NIORegistration {
         return .socketChannel(self, interested)
-    }
-
-    init(socket: Socket, parent: Channel? = nil, eventLoop: SelectableEventLoop) throws {
-        self.pendingWrites = PendingStreamWritesManager(iovecs: eventLoop.iovecs, storageRefs: eventLoop.storageRefs)
-        try super.init(socket: socket, parent: parent, eventLoop: eventLoop, recvAllocator: AdaptiveRecvByteBufferAllocator())
-    }
-
-    override func readFromSocket() throws -> ReadResult {
-        self.eventLoop.assertInEventLoop()
-        // Just allocate one time for the while read loop. This is fine as ByteBuffer is a struct and uses COW.
-        var buffer = recvAllocator.buffer(allocator: allocator)
-        var result = ReadResult.none
-        for i in 1...maxMessagesPerRead {
-            guard self.isOpen && !self.inputShutdown else {
-                throw ChannelError.eof
-            }
-            // Reset reader and writerIndex and so allow to have the buffer filled again. This is better here than at
-            // the end of the loop to not do an allocation when the loop exits.
-            buffer.clear()
-            switch try buffer.withMutableWritePointer(body: self.socket.read(pointer:)) {
-            case .processed(let bytesRead):
-                if bytesRead > 0 {
-                    let mayGrow = recvAllocator.record(actualReadBytes: bytesRead)
-
-                    readPending = false
-
-                    assert(self.isActive)
-                    pipeline.fireChannelRead0(NIOAny(buffer))
-                    result = .some
-
-                    if buffer.writableBytes > 0 {
-                        // If we did not fill the whole buffer with read(...) we should stop reading and wait until we get notified again.
-                        // Otherwise chances are good that the next read(...) call will either read nothing or only a very small amount of data.
-                        // Also this will allow us to call fireChannelReadComplete() which may give the user the chance to flush out all pending
-                        // writes.
-                        return result
-                    } else if mayGrow && i < maxMessagesPerRead {
-                        // if the ByteBuffer may grow on the next allocation due we used all the writable bytes we should allocate a new `ByteBuffer` to allow ramping up how much data
-                        // we are able to read on the next read operation.
-                        buffer = recvAllocator.buffer(allocator: allocator)
-                    }
-                } else {
-                    if inputShutdown {
-                        // We received a EOF because we called shutdown on the fd by ourself, unregister from the Selector and return
-                        readPending = false
-                        unregisterForReadable()
-                        return result
-                    }
-                    // end-of-file
-                    throw ChannelError.eof
-                }
-            case .wouldBlock(let bytesRead):
-                assert(bytesRead == 0)
-                return result
-            }
-        }
-        return result
-    }
-
-    override func writeToSocket() throws -> OverallWriteResult {
-        let result = try self.pendingWrites.triggerAppropriateWriteOperations(scalarBufferWriteOperation: { ptr in
-            guard ptr.count > 0 else {
-                // No need to call write if the buffer is empty.
-                return .processed(0)
-            }
-            // normal write
-            return try self.socket.write(pointer: ptr)
-        }, vectorBufferWriteOperation: { ptrs in
-            // Gathering write
-            try self.socket.writev(iovecs: ptrs)
-        }, scalarFileWriteOperation: { descriptor, index, endIndex in
-            try self.socket.sendFile(fd: descriptor, offset: index, count: endIndex - index)
-        })
-        if result.writable {
-            // writable again
-            self.pipeline.fireChannelWritabilityChanged0()
-        }
-        return result.writeResult
     }
 
     override func connectSocket(to address: SocketAddress) throws -> Bool {
@@ -219,88 +108,18 @@ final class SocketChannel: BaseSocketChannel<Socket> {
         try self.socket.finishConnect()
     }
 
-    override func close0(error: Error, mode: CloseMode, promise: EventLoopPromise<Void>?) {
-        do {
-            switch mode {
-            case .output:
-                if outputShutdown {
-                    promise?.fail(ChannelError.outputClosed)
-                    return
-                }
-                try socket.shutdown(how: .WR)
-                outputShutdown = true
-                // Fail all pending writes and so ensure all pending promises are notified
-                pendingWrites.failAll(error: error, close: false)
-                unregisterForWritable()
-                promise?.succeed(())
 
-                pipeline.fireUserInboundEventTriggered(ChannelEvent.outputClosed)
-
-            case .input:
-                if inputShutdown {
-                    promise?.fail(ChannelError.inputClosed)
-                    return
-                }
-                switch error {
-                case ChannelError.eof:
-                    // No need to explicit call socket.shutdown(...) as we received an EOF and the call would only cause
-                    // ENOTCON
-                    break
-                default:
-                    try socket.shutdown(how: .RD)
-                }
-                inputShutdown = true
-                unregisterForReadable()
-                promise?.succeed(())
-
-                pipeline.fireUserInboundEventTriggered(ChannelEvent.inputClosed)
-            case .all:
-                if let timeout = connectTimeoutScheduled {
-                    connectTimeoutScheduled = nil
-                    timeout.cancel()
-                }
-                super.close0(error: error, mode: mode, promise: promise)
-            }
-        } catch let err {
-            promise?.fail(err)
-        }
+    override func register(selector: Selector<NIORegistration>, interested: SelectorEventSet) throws {
+        try selector.register(selectable: self.socket, interested: interested, makeRegistration: self.registrationFor(interested:))
     }
 
-    override func markFlushPoint() {
-        // Even if writable() will be called later by the EventLoop we still need to mark the flush checkpoint so we are sure all the flushed messages
-        // are actually written once writable() is called.
-        self.pendingWrites.markFlushCheckpoint()
+    override func deregister(selector: Selector<NIORegistration>, mode: CloseMode) throws {
+        assert(mode == .all)
+        try selector.deregister(selectable: self.socket)
     }
 
-    override func cancelWritesOnClose(error: Error) {
-        self.pendingWrites.failAll(error: error, close: true)
-    }
-
-    @discardableResult override func readIfNeeded0() -> Bool {
-        if inputShutdown {
-            return false
-        }
-        return super.readIfNeeded0()
-    }
-
-    override public func read0() {
-        if inputShutdown {
-            return
-        }
-        super.read0()
-    }
-
-    override func bufferPendingWrite(data: NIOAny, promise: EventLoopPromise<Void>?) {
-        if outputShutdown {
-            promise?.fail(ChannelError.outputClosed)
-            return
-        }
-
-        let data = data.forceAsIOData()
-
-        if !self.pendingWrites.add(data: data, promise: promise) {
-            pipeline.fireChannelWritabilityChanged0()
-        }
+    override func reregister(selector: Selector<NIORegistration>, interested: SelectorEventSet) throws {
+        try selector.reregister(selectable: self.socket, interested: interested)
     }
 }
 
@@ -316,13 +135,16 @@ final class ServerSocketChannel: BaseSocketChannel<ServerSocket> {
     // This is `Channel` API so must be thread-safe.
     override public var isWritable: Bool { return false }
 
-    convenience init(eventLoop: SelectableEventLoop, group: EventLoopGroup, protocolFamily: Int32) throws {
+    convenience init(eventLoop: SelectableEventLoop, group: EventLoopGroup, protocolFamily: NIOBSDSocket.ProtocolFamily) throws {
         try self.init(serverSocket: try ServerSocket(protocolFamily: protocolFamily, setNonBlocking: true), eventLoop: eventLoop, group: group)
     }
 
     init(serverSocket: ServerSocket, eventLoop: SelectableEventLoop, group: EventLoopGroup) throws {
         self.group = group
-        try super.init(socket: serverSocket, eventLoop: eventLoop, recvAllocator: AdaptiveRecvByteBufferAllocator())
+        try super.init(socket: serverSocket,
+                       parent: nil,
+                       eventLoop: eventLoop,
+                       recvAllocator: AdaptiveRecvByteBufferAllocator())
     }
 
     convenience init(descriptor: CInt, eventLoop: SelectableEventLoop, group: EventLoopGroup) throws {
@@ -331,7 +153,7 @@ final class ServerSocketChannel: BaseSocketChannel<ServerSocket> {
         try self.socket.listen(backlog: backlog)
     }
 
-    override func registrationFor(interested: SelectorEventSet) -> NIORegistration {
+    func registrationFor(interested: SelectorEventSet) -> NIORegistration {
         return .serverSocketChannel(self, interested)
     }
 
@@ -343,7 +165,7 @@ final class ServerSocketChannel: BaseSocketChannel<ServerSocket> {
         }
 
         switch option {
-        case _ as BacklogOption:
+        case _ as ChannelOptions.Types.BacklogOption:
             backlog = value as! Int32
         default:
             try super.setOption0(option, value: value)
@@ -358,7 +180,7 @@ final class ServerSocketChannel: BaseSocketChannel<ServerSocket> {
         }
 
         switch option {
-        case _ as BacklogOption:
+        case _ as ChannelOptions.Types.BacklogOption:
             return backlog as! Option.Value
         default:
             return try super.getOption0(option)
@@ -469,6 +291,10 @@ final class ServerSocketChannel: BaseSocketChannel<ServerSocket> {
         }
     }
 
+    override func hasFlushedPendingWrites() -> Bool {
+        return false
+    }
+
     override func bufferPendingWrite(data: NIOAny, promise: EventLoopPromise<Void>?) {
         promise?.fail(ChannelError.operationUnsupported)
     }
@@ -480,27 +306,31 @@ final class ServerSocketChannel: BaseSocketChannel<ServerSocket> {
     override func flushNow() -> IONotificationState {
         return IONotificationState.unregister
     }
+
+    override func register(selector: Selector<NIORegistration>, interested: SelectorEventSet) throws {
+        try selector.register(selectable: self.socket, interested: interested, makeRegistration: self.registrationFor(interested:))
+    }
+
+    override func deregister(selector: Selector<NIORegistration>, mode: CloseMode) throws {
+        assert(mode == .all)
+        try selector.deregister(selectable: self.socket)
+    }
+
+    override func reregister(selector: Selector<NIORegistration>, interested: SelectorEventSet) throws {
+        try selector.reregister(selectable: self.socket, interested: interested)
+    }
 }
 
 /// A channel used with datagram sockets.
 ///
-/// Currently this channel is in an early stage. It supports only unconnected
-/// datagram sockets, and does not currently support either multicast or
-/// broadcast send or receive.
-///
-/// The following features are well worth adding:
-///
-/// - Multicast support
-/// - Broadcast support
-/// - Connected mode
+/// Currently, it does not support connected mode which is well worth adding.
 final class DatagramChannel: BaseSocketChannel<Socket> {
 
     // Guard against re-entrance of flushNow() method.
     private let pendingWrites: PendingDatagramWritesManager
 
     /// Support for vector reads, if enabled.
-    private var vectorReadManager: DatagramVectorReadManager?
-
+    private var vectorReadManager: Optional<DatagramVectorReadManager>
     // This is `Channel` API so must be thread-safe.
     override public var isWritable: Bool {
         return pendingWrites.isWritable
@@ -513,7 +343,7 @@ final class DatagramChannel: BaseSocketChannel<Socket> {
     }
 
     convenience init(eventLoop: SelectableEventLoop, descriptor: CInt) throws {
-        let socket = Socket(descriptor: descriptor)
+        let socket = try Socket(descriptor: descriptor)
 
         do {
             try self.init(socket: socket, eventLoop: eventLoop)
@@ -529,8 +359,9 @@ final class DatagramChannel: BaseSocketChannel<Socket> {
         }
     }
 
-    init(eventLoop: SelectableEventLoop, protocolFamily: Int32) throws {
-        let socket = try Socket(protocolFamily: protocolFamily, type: Posix.SOCK_DGRAM)
+    init(eventLoop: SelectableEventLoop, protocolFamily: NIOBSDSocket.ProtocolFamily) throws {
+        self.vectorReadManager = nil
+        let socket = try Socket(protocolFamily: protocolFamily, type: .datagram)
         do {
             try socket.setNonBlocking()
         } catch let err {
@@ -543,10 +374,14 @@ final class DatagramChannel: BaseSocketChannel<Socket> {
                                                           addresses: eventLoop.addresses,
                                                           storageRefs: eventLoop.storageRefs)
 
-        try super.init(socket: socket, eventLoop: eventLoop, recvAllocator: FixedSizeRecvByteBufferAllocator(capacity: 2048))
+        try super.init(socket: socket,
+                       parent: nil,
+                       eventLoop: eventLoop,
+                       recvAllocator: FixedSizeRecvByteBufferAllocator(capacity: 2048))
     }
 
     init(socket: Socket, parent: Channel? = nil, eventLoop: SelectableEventLoop) throws {
+        self.vectorReadManager = nil
         try socket.setNonBlocking()
         self.pendingWrites = PendingDatagramWritesManager(msgs: eventLoop.msgs,
                                                           iovecs: eventLoop.iovecs,
@@ -565,17 +400,32 @@ final class DatagramChannel: BaseSocketChannel<Socket> {
         }
 
         switch option {
-        case _ as WriteSpinOption:
+        case _ as ChannelOptions.Types.WriteSpinOption:
             pendingWrites.writeSpinCount = value as! UInt
-        case _ as WriteBufferWaterMarkOption:
-            pendingWrites.waterMark = value as! WriteBufferWaterMark
-        case _ as DatagramVectorReadMessageCountOption:
+        case _ as ChannelOptions.Types.WriteBufferWaterMarkOption:
+            pendingWrites.waterMark = value as! ChannelOptions.Types.WriteBufferWaterMark
+        case _ as ChannelOptions.Types.DatagramVectorReadMessageCountOption:
             // We only support vector reads on these OSes. Let us know if there's another OS with this syscall!
             #if os(Linux) || os(FreeBSD) || os(Android)
             self.vectorReadManager.updateMessageCount(value as! Int)
             #else
             break
             #endif
+        case _ as ChannelOptions.Types.ExplicitCongestionNotificationsOption:
+            let valueAsInt: Int32 = value as! Bool ? 1 : 0
+            switch self.localAddress?.protocol {
+            case .some(.inet):
+                try self.socket.setOption(level: .ip,
+                                          name: .ip_recv_tos,
+                                          value: valueAsInt)
+            case .some(.inet6):
+                try self.socket.setOption(level: .ipv6,
+                                          name: .ipv6_recv_tclass,
+                                          value: valueAsInt)
+            default:
+                // Explicit congestion notification is only supported for IP
+                throw ChannelError.operationUnsupported
+            }
         default:
             try super.setOption0(option, value: value)
         }
@@ -589,18 +439,30 @@ final class DatagramChannel: BaseSocketChannel<Socket> {
         }
 
         switch option {
-        case _ as WriteSpinOption:
+        case _ as ChannelOptions.Types.WriteSpinOption:
             return pendingWrites.writeSpinCount as! Option.Value
-        case _ as WriteBufferWaterMarkOption:
+        case _ as ChannelOptions.Types.WriteBufferWaterMarkOption:
             return pendingWrites.waterMark as! Option.Value
-        case _ as DatagramVectorReadMessageCountOption:
+        case _ as ChannelOptions.Types.DatagramVectorReadMessageCountOption:
             return (self.vectorReadManager?.messageCount ?? 0) as! Option.Value
+        case _ as ChannelOptions.Types.ExplicitCongestionNotificationsOption:
+            switch self.localAddress?.protocol {
+            case .some(.inet):
+                return try (self.socket.getOption(level: .ip,
+                                                  name: .ip_recv_tos) != 0) as! Option.Value
+            case .some(.inet6):
+                return try (self.socket.getOption(level: .ipv6,
+                                                  name: .ipv6_recv_tclass) != 0) as! Option.Value
+            default:
+                // Explicit congestion notification is only supported for IP
+                throw ChannelError.operationUnsupported
+            }
         default:
             return try super.getOption0(option)
         }
     }
 
-    override func registrationFor(interested: SelectorEventSet) -> NIORegistration {
+    func registrationFor(interested: SelectorEventSet) -> NIORegistration {
         return .datagramChannel(self, interested)
     }
 
@@ -731,6 +593,10 @@ final class DatagramChannel: BaseSocketChannel<Socket> {
         }
     }
 
+    override final func hasFlushedPendingWrites() -> Bool {
+        return self.pendingWrites.isFlushPending
+    }
+
     /// Mark a flush point. This is called when flush is received, and instructs
     /// the implementation to record the flush.
     override func markFlushPoint() {
@@ -758,12 +624,7 @@ final class DatagramChannel: BaseSocketChannel<Socket> {
         }, vectorWriteOperation: { msgs in
             try self.socket.sendmmsg(msgs: msgs)
         })
-        if result.writable {
-            // writable again
-            assert(self.isActive)
-            self.pipeline.fireChannelWritabilityChanged0()
-        }
-        return result.writeResult
+        return result
     }
 
     // MARK: Datagram Channel overrides not required by BaseSocketChannel
@@ -782,23 +643,36 @@ final class DatagramChannel: BaseSocketChannel<Socket> {
             promise?.fail(err)
         }
     }
+
+    override func register(selector: Selector<NIORegistration>, interested: SelectorEventSet) throws {
+        try selector.register(selectable: self.socket, interested: interested, makeRegistration: self.registrationFor(interested:))
+    }
+
+    override func deregister(selector: Selector<NIORegistration>, mode: CloseMode) throws {
+        assert(mode == .all)
+        try selector.deregister(selectable: self.socket)
+    }
+
+    override func reregister(selector: Selector<NIORegistration>, interested: SelectorEventSet) throws {
+        try selector.reregister(selectable: self.socket, interested: interested)
+    }
 }
 
 extension SocketChannel: CustomStringConvertible {
     var description: String {
-        return "SocketChannel { selectable = \(self.selectable), localAddress = \(self.localAddress.debugDescription), remoteAddress = \(self.remoteAddress.debugDescription) }"
+        return "SocketChannel { \(self.socketDescription), active = \(self.isActive), localAddress = \(self.localAddress.debugDescription), remoteAddress = \(self.remoteAddress.debugDescription) }"
     }
 }
 
 extension ServerSocketChannel: CustomStringConvertible {
     var description: String {
-        return "ServerSocketChannel { selectable = \(self.selectable), localAddress = \(self.localAddress.debugDescription), remoteAddress = \(self.remoteAddress.debugDescription) }"
+        return "ServerSocketChannel { \(self.socketDescription), active = \(self.isActive), localAddress = \(self.localAddress.debugDescription), remoteAddress = \(self.remoteAddress.debugDescription) }"
     }
 }
 
 extension DatagramChannel: CustomStringConvertible {
     var description: String {
-        return "DatagramChannel { selectable = \(self.selectable), localAddress = \(self.localAddress.debugDescription), remoteAddress = \(self.remoteAddress.debugDescription) }"
+        return "DatagramChannel { \(self.socketDescription), active = \(self.isActive), localAddress = \(self.localAddress.debugDescription), remoteAddress = \(self.remoteAddress.debugDescription) }"
     }
 }
 
@@ -820,16 +694,16 @@ extension DatagramChannel: MulticastChannel {
         ///     - level: The socket option level. Must be one of `IPPROTO_IP` or
         ///         `IPPROTO_IPV6`. Will trap if an invalid value is provided.
         /// - returns: The socket option name to use for this group operation.
-        func optionName(level: CInt) -> CInt {
+        func optionName(level: NIOBSDSocket.OptionLevel) -> NIOBSDSocket.Option {
             switch (self, level) {
-            case (.join, CInt(IPPROTO_IP)):
-                return CInt(IP_ADD_MEMBERSHIP)
-            case (.leave, CInt(IPPROTO_IP)):
-                return CInt(IP_DROP_MEMBERSHIP)
-            case (.join, CInt(IPPROTO_IPV6)):
-                return CInt(IPV6_JOIN_GROUP)
-            case (.leave, CInt(IPPROTO_IPV6)):
-                return CInt(IPV6_LEAVE_GROUP)
+            case (.join, .ip):
+                return .ip_add_membership
+            case (.leave, .ip):
+                return .ip_drop_membership
+            case (.join, .ipv6):
+                return .ipv6_join_group
+            case (.leave, .ipv6):
+                return .ipv6_leave_group
             default:
                 preconditionFailure("Unexpected socket option level: \(level)")
             }
@@ -885,7 +759,7 @@ extension DatagramChannel: MulticastChannel {
             return
         }
 
-        guard localAddress.protocolFamily == group.protocolFamily else {
+        guard localAddress.protocol == group.protocol else {
             promise?.fail(ChannelError.badMulticastGroupAddressFamily)
             return
         }
@@ -904,19 +778,19 @@ extension DatagramChannel: MulticastChannel {
             case (.v4(let groupAddress), .some(.v4(let interfaceAddress))):
                 // IPv4Binding with specific target interface.
                 let multicastRequest = ip_mreq(imr_multiaddr: groupAddress.address.sin_addr, imr_interface: interfaceAddress.address.sin_addr)
-                try self.socket.setOption(level: CInt(IPPROTO_IP), name: operation.optionName(level: CInt(IPPROTO_IP)), value: multicastRequest)
+                try self.socket.setOption(level: .ip, name: operation.optionName(level: .ip), value: multicastRequest)
             case (.v4(let groupAddress), .none):
                 // IPv4 binding without target interface.
                 let multicastRequest = ip_mreq(imr_multiaddr: groupAddress.address.sin_addr, imr_interface: in_addr(s_addr: INADDR_ANY))
-                try self.socket.setOption(level: CInt(IPPROTO_IP), name: operation.optionName(level: CInt(IPPROTO_IP)), value: multicastRequest)
+                try self.socket.setOption(level: .ip, name: operation.optionName(level: .ip), value: multicastRequest)
             case (.v6(let groupAddress), .some(.v6)):
                 // IPv6 binding with specific target interface.
                 let multicastRequest = ipv6_mreq(ipv6mr_multiaddr: groupAddress.address.sin6_addr, ipv6mr_interface: UInt32(interface!.interfaceIndex))
-                try self.socket.setOption(level: CInt(IPPROTO_IPV6), name: operation.optionName(level: CInt(IPPROTO_IPV6)), value: multicastRequest)
+                try self.socket.setOption(level: .ipv6, name: operation.optionName(level: .ipv6), value: multicastRequest)
             case (.v6(let groupAddress), .none):
                 // IPv6 binding with no specific interface requested.
                 let multicastRequest = ipv6_mreq(ipv6mr_multiaddr: groupAddress.address.sin6_addr, ipv6mr_interface: 0)
-                try self.socket.setOption(level: CInt(IPPROTO_IPV6), name: operation.optionName(level: CInt(IPPROTO_IPV6)), value: multicastRequest)
+                try self.socket.setOption(level: .ipv6, name: operation.optionName(level: .ipv6), value: multicastRequest)
             case (.v4, .some(.v6)), (.v6, .some(.v4)), (.v4, .some(.unixDomainSocket)), (.v6, .some(.unixDomainSocket)):
                 // Mismatched group and interface address: this is an error.
                 throw ChannelError.badInterfaceAddressFamily

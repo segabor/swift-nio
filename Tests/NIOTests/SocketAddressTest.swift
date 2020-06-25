@@ -20,7 +20,7 @@ class SocketAddressTest: XCTestCase {
     func testDescriptionWorks() throws {
         var ipv4SocketAddress = sockaddr_in()
         let res = "10.0.0.1".withCString { p in
-            inet_pton(AF_INET, p, &ipv4SocketAddress.sin_addr)
+            inet_pton(NIOBSDSocket.AddressFamily.inet.rawValue, p, &ipv4SocketAddress.sin_addr)
         }
         XCTAssertEqual(res, 1)
         ipv4SocketAddress.sin_port = (12345 as in_port_t).bigEndian
@@ -54,7 +54,7 @@ class SocketAddressTest: XCTestCase {
         #else
           address.sin6_len  = UInt8(MemoryLayout<sockaddr_in6>.size)
         #endif
-        address.sin6_family = sa_family_t(AF_INET6)
+        address.sin6_family = sa_family_t(NIOBSDSocket.AddressFamily.inet6.rawValue)
         address.sin6_addr   = sampleIn6Addr.withUnsafeBytes {
             $0.baseAddress!.bindMemory(to: in6_addr.self, capacity: 1).pointee
         }
@@ -65,6 +65,15 @@ class SocketAddressTest: XCTestCase {
         XCTAssertEqual(s, sampleString,
                        "Address description is way below our expectations 😱")
     }
+	
+    func testIPAddressWorks() throws {
+        let sa = try! SocketAddress(ipAddress: "127.0.0.1", port: 12345)
+        XCTAssertEqual("127.0.0.1", sa.ipAddress)
+        let sa6 = try! SocketAddress(ipAddress: "::1", port: 12345)
+        XCTAssertEqual("::1", sa6.ipAddress)
+        let unix = try! SocketAddress(unixDomainSocketPath: "/definitely/a/path")
+        XCTAssertEqual(nil, unix.ipAddress)
+    }
 
     func testCanCreateIPv4AddressFromString() throws {
         let sa = try SocketAddress(ipAddress: "127.0.0.1", port: 80)
@@ -73,7 +82,7 @@ class SocketAddressTest: XCTestCase {
             var addr = address.address
             let host = address.host
             XCTAssertEqual(host, "")
-            XCTAssertEqual(addr.sin_family, sa_family_t(AF_INET))
+            XCTAssertEqual(addr.sin_family, sa_family_t(NIOBSDSocket.AddressFamily.inet.rawValue))
             XCTAssertEqual(addr.sin_port, in_port_t(80).bigEndian)
             expectedAddress.withUnsafeBytes { expectedPtr in
                 withUnsafeBytes(of: &addr.sin_addr) { actualPtr in
@@ -93,7 +102,7 @@ class SocketAddressTest: XCTestCase {
             var addr = address.address
             let host = address.host
             XCTAssertEqual(host, "")
-            XCTAssertEqual(addr.sin6_family, sa_family_t(AF_INET6))
+            XCTAssertEqual(addr.sin6_family, sa_family_t(NIOBSDSocket.AddressFamily.inet6.rawValue))
             XCTAssertEqual(addr.sin6_port, in_port_t(443).bigEndian)
             XCTAssertEqual(addr.sin6_scope_id, 0)
             XCTAssertEqual(addr.sin6_flowinfo, 0)
@@ -108,13 +117,14 @@ class SocketAddressTest: XCTestCase {
         }
     }
 
-    func testRejectsNonIPStrings() throws {
-        do {
-            _ = try SocketAddress(ipAddress: "definitelynotanip", port: 800)
-        } catch SocketAddressError.failedToParseIPString(let str) {
-            XCTAssertEqual(str, "definitelynotanip")
-        } catch {
-            XCTFail("Unexpected error \(error)")
+    func testRejectsNonIPStrings() {
+        XCTAssertThrowsError(try SocketAddress(ipAddress: "definitelynotanip", port: 800)) { error in
+            switch error as? SocketAddressError {
+            case .some(.failedToParseIPString("definitelynotanip")):
+                () // ok
+            default:
+                XCTFail("unexpected error: \(error)")
+            }
         }
     }
 
@@ -185,18 +195,18 @@ class SocketAddressTest: XCTestCase {
         var secondCopy = secondIPAddress
         var thirdCopy = thirdIPAddress
 
-        _ = firstIPAddress.withMutableSockAddr { (addr, size) -> Void in
+        firstIPAddress.withMutableSockAddr { (addr, size) -> Void in
             addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
                 $0.pointee.sin_port = 5
             }
         }
-        _ = secondIPAddress.withMutableSockAddr { (addr, size) -> Void in
+        secondIPAddress.withMutableSockAddr { (addr, size) -> Void in
             XCTAssertEqual(size, MemoryLayout<sockaddr_in6>.size)
             addr.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
                 $0.pointee.sin6_port = in_port_t(5).bigEndian
             }
         }
-        _ = thirdIPAddress.withMutableSockAddr { (addr, size) -> Void in
+        thirdIPAddress.withMutableSockAddr { (addr, size) -> Void in
             XCTAssertEqual(size, MemoryLayout<sockaddr_un>.size)
             addr.withMemoryRebound(to: sockaddr_un.self, capacity: 1) {
                 $0.pointee.sun_path.2 = 50
@@ -336,6 +346,42 @@ class SocketAddressTest: XCTestCase {
         XCTAssertNotEqual(fifth, sixth)
     }
 
+    func testHashEqualSocketAddresses() throws {
+        let first = try SocketAddress(ipAddress: "::1", port: 80)
+        let second = try SocketAddress(ipAddress: "00:00::1", port: 80)
+        let third = try SocketAddress(ipAddress: "127.0.0.1", port: 443)
+        let fourth = try SocketAddress(ipAddress: "127.0.0.1", port: 443)
+        let fifth = try SocketAddress(unixDomainSocketPath: "/var/tmp")
+        let sixth = try SocketAddress(unixDomainSocketPath: "/var/tmp")
+
+        let set: Set<SocketAddress> = [first, second, third, fourth, fifth, sixth]
+        XCTAssertEqual(set.count, 3)
+        XCTAssertEqual(set, [first, third, fifth])
+        XCTAssertEqual(set, [second, fourth, sixth])
+    }
+
+    func testHashUnequalAddressesOnPort() throws {
+        let first = try SocketAddress(ipAddress: "::1", port: 80)
+        let second = try SocketAddress(ipAddress: "::1", port: 443)
+        let third = try SocketAddress(ipAddress: "127.0.0.1", port: 80)
+        let fourth = try SocketAddress(ipAddress: "127.0.0.1", port: 443)
+
+        let set: Set<SocketAddress> = [first, second, third, fourth]
+        XCTAssertEqual(set.count, 4)
+    }
+
+    func testHashUnequalOnAddress() throws {
+        let first = try SocketAddress(ipAddress: "::1", port: 80)
+        let second = try SocketAddress(ipAddress: "::2", port: 80)
+        let third = try SocketAddress(ipAddress: "127.0.0.1", port: 443)
+        let fourth = try SocketAddress(ipAddress: "127.0.0.2", port: 443)
+        let fifth = try SocketAddress(unixDomainSocketPath: "/var/tmp")
+        let sixth = try SocketAddress(unixDomainSocketPath: "/var/tmq")
+
+        let set: Set<SocketAddress> = [first, second, third, fourth, fifth, sixth]
+        XCTAssertEqual(set.count, 6)
+    }
+
     func testUnequalAcrossFamilies() throws {
         let first = try SocketAddress(ipAddress: "::1", port: 80)
         let second = try SocketAddress(ipAddress: "127.0.0.1", port: 80)
@@ -345,6 +391,29 @@ class SocketAddressTest: XCTestCase {
         XCTAssertNotEqual(second, third)
         // By the transitive property first != third, but let's protect against me being an idiot
         XCTAssertNotEqual(third, first)
+    }
+
+    func testUnixSocketAddressIgnoresTrailingJunk() throws {
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(NIOBSDSocket.AddressFamily.unix.rawValue)
+        let pathBytes: [UInt8] = "/var/tmp".utf8 + [0]
+
+        pathBytes.withUnsafeBufferPointer { srcPtr in
+            withUnsafeMutablePointer(to: &addr.sun_path) { dstPtr in
+                dstPtr.withMemoryRebound(to: UInt8.self, capacity: srcPtr.count) { dstPtr in
+                    dstPtr.assign(from: srcPtr.baseAddress!, count: srcPtr.count)
+                }
+            }
+        }
+
+        let first = SocketAddress(addr)
+
+        // Now poke a random byte at the end. This should be ignored, as that's uninitialized memory.
+        addr.sun_path.100 = 60
+        let second = SocketAddress(addr)
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.hashValue, second.hashValue)
     }
 
     func testPortAccessor() throws {
@@ -357,8 +426,28 @@ class SocketAddressTest: XCTestCase {
         var storage = sockaddr_storage()
         XCTAssertEqual(storage.ss_family, 0)
         storage.withMutableSockAddr { (addr, _) in
-            addr.pointee.sa_family = sa_family_t(AF_UNIX)
+            addr.pointee.sa_family = sa_family_t(NIOBSDSocket.AddressFamily.unix.rawValue)
         }
-        XCTAssertEqual(storage.ss_family, sa_family_t(AF_UNIX))
+        XCTAssertEqual(storage.ss_family, sa_family_t(NIOBSDSocket.AddressFamily.unix.rawValue))
+    }
+
+    func testPortIsMutable() throws {
+        var ipV4 = try SocketAddress(ipAddress: "127.0.0.1", port: 80)
+        var ipV6 = try SocketAddress(ipAddress: "::1", port: 80)
+        var unix = try SocketAddress(unixDomainSocketPath: "/definitely/a/path")
+
+        ipV4.port = 81
+        ipV6.port = 81
+
+        XCTAssertEqual(ipV4.port, 81)
+        XCTAssertEqual(ipV6.port, 81)
+
+        ipV4.port = nil
+        ipV6.port = nil
+        unix.port = nil
+
+        XCTAssertEqual(ipV4.port, 0)
+        XCTAssertEqual(ipV6.port, 0)
+        XCTAssertNil(unix.port)
     }
 }

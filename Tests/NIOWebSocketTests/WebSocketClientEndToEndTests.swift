@@ -34,11 +34,8 @@ extension ChannelPipeline {
     fileprivate func assertDoesNotContain<Handler: ChannelHandler>(handlerType: Handler.Type,
                                                                    file: StaticString = #file,
                                                                    line: UInt = #line) throws {
-        do {
-            let context = try self.context(handlerType: handlerType).wait()
-            XCTFail("Found handler: \(context.handler)", file: file, line: line)
-        } catch ChannelPipelineError.notFound {
-            // Nothing to see here
+        XCTAssertThrowsError(try self.context(handlerType: handlerType).wait(), file: (file), line: line) { error in
+            XCTAssertEqual(.notFound, error as? ChannelPipelineError)
         }
     }
     
@@ -48,14 +45,6 @@ extension ChannelPipeline {
         } catch ChannelPipelineError.notFound {
             XCTFail("Did not find handler")
         }
-    }
-}
-
-extension ByteBuffer {
-    fileprivate static func forString(_ string: String) -> ByteBuffer {
-        var buf = ByteBufferAllocator().buffer(capacity: string.utf8.count)
-        buf.writeString(string)
-        return buf
     }
 }
 
@@ -168,7 +157,7 @@ class WebSocketClientEndToEndTests: XCTestCase {
         let requestKey = "OfS0wDaT5NoxF2gqm7Zj2YtetzM="
         let responseKey = "yKEqitDFPE81FyIhKTm+ojBqigk="
 
-        let basicUpgrader = NIOWebClientSocketUpgrader(requestKey: requestKey,
+        let basicUpgrader = NIOWebSocketClientUpgrader(requestKey: requestKey,
                                                        upgradePipelineHandler: { (channel: Channel, _: HTTPResponseHead) in
                 channel.pipeline.addHandler(WebSocketRecorderHandler())
         })
@@ -180,7 +169,7 @@ class WebSocketClientEndToEndTests: XCTestCase {
                                                     // This is called before the upgrader gets called.
                                                     upgradeHandlerCallbackFired = true
         }
-        
+
         // Read the server request.
         if let requestString = try clientChannel.readByteBufferOutputAsString() {
             XCTAssertEqual(requestString, self.basicRequest() + "\r\nConnection: upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: \(requestKey)\r\nSec-WebSocket-Version: 13\r\n\r\n")
@@ -191,7 +180,7 @@ class WebSocketClientEndToEndTests: XCTestCase {
         // Push the successful server response.
         let response = "HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept:\(responseKey)\r\n\r\n"
         
-        XCTAssertNoThrow(try clientChannel.writeInbound(ByteBuffer.forString(response)))
+        XCTAssertNoThrow(try clientChannel.writeInbound(clientChannel.allocator.buffer(string: response)))
         
         clientChannel.embeddedEventLoop.run()
         
@@ -221,7 +210,7 @@ class WebSocketClientEndToEndTests: XCTestCase {
         
         let requestKey = "OfS0wDaT5NoxF2gqm7Zj2YtetzM="
         
-        let basicUpgrader = NIOWebClientSocketUpgrader(requestKey: requestKey,
+        let basicUpgrader = NIOWebSocketClientUpgrader(requestKey: requestKey,
                                                        upgradePipelineHandler: { (channel: Channel, _: HTTPResponseHead) in
                                                         channel.pipeline.addHandler(WebSocketRecorderHandler())
         })
@@ -231,19 +220,13 @@ class WebSocketClientEndToEndTests: XCTestCase {
                                                    clientUpgraders: [basicUpgrader]) { _ in
         }
 
-        
         // Push the successful server response but with a missing accept key.
         let response = "HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: websocket\r\n\r\n"
         
-        do {
-            try clientChannel.writeInbound(ByteBuffer.forString(response))
-            XCTFail()
-        } catch {
-            if (error as? NIOHTTPClientUpgradeError) != .upgraderDeniedUpgrade {
-                XCTFail()
-            }
+        XCTAssertThrowsError(try clientChannel.writeInbound(clientChannel.allocator.buffer(string: response))) { error in
+            XCTAssertEqual(.upgraderDeniedUpgrade, error as? NIOHTTPClientUpgradeError)
         }
-        
+
         // Close the pipeline.
         XCTAssertNoThrow(try clientChannel.close().wait())
     }
@@ -253,7 +236,7 @@ class WebSocketClientEndToEndTests: XCTestCase {
         let requestKey = "OfS0wDaT5NoxF2gqm7Zj2YtetzM="
         let responseKey = "notACorrectKeyL1am=F1y=nn="
         
-        let basicUpgrader = NIOWebClientSocketUpgrader(requestKey: requestKey,
+        let basicUpgrader = NIOWebSocketClientUpgrader(requestKey: requestKey,
                                                        upgradePipelineHandler: { (channel: Channel, _: HTTPResponseHead) in
                                                         channel.pipeline.addHandler(WebSocketRecorderHandler())
         })
@@ -262,19 +245,14 @@ class WebSocketClientEndToEndTests: XCTestCase {
         let clientChannel = try setUpClientChannel(clientHTTPHandler: BasicHTTPHandler(),
                                                    clientUpgraders: [basicUpgrader]) { _ in
         }
-        
+
         // Push the successful server response but with an incorrect response key.
         let response = "HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept:\(responseKey)\r\n\r\n"
 
-        do {
-            try clientChannel.writeInbound(ByteBuffer.forString(response))
-            XCTFail()
-        } catch {
-            if (error as? NIOHTTPClientUpgradeError) != .upgraderDeniedUpgrade {
-                XCTFail()
-            }
+        XCTAssertThrowsError(try clientChannel.writeInbound(clientChannel.allocator.buffer(string: response))) { error in
+            XCTAssertEqual(.upgraderDeniedUpgrade, error as? NIOHTTPClientUpgradeError)
         }
-        
+
         // Close the pipeline.
         XCTAssertNoThrow(try clientChannel.close().wait())
     }
@@ -284,7 +262,7 @@ class WebSocketClientEndToEndTests: XCTestCase {
         let requestKey = "OfS0wDaT5NoxF2gqm7Zj2YtetzM="
         let responseKey = "yKEqitDFPE81FyIhKTm+ojBqigk="
         
-        let basicUpgrader = NIOWebClientSocketUpgrader(requestKey: requestKey,
+        let basicUpgrader = NIOWebSocketClientUpgrader(requestKey: requestKey,
                                                        upgradePipelineHandler: { (channel: Channel, _: HTTPResponseHead) in
                                                         channel.pipeline.addHandler(WebSocketRecorderHandler())
         })
@@ -293,19 +271,14 @@ class WebSocketClientEndToEndTests: XCTestCase {
         let clientChannel = try setUpClientChannel(clientHTTPHandler: BasicHTTPHandler(),
                                                    clientUpgraders: [basicUpgrader]) { _ in
         }
-        
+
         // Push the successful server response with an incorrect protocol.
         let response = "HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: myProtocol\r\nSec-WebSocket-Accept:\(responseKey)\r\n\r\n"
         
-        do {
-            try clientChannel.writeInbound(ByteBuffer.forString(response))
-            XCTFail()
-        } catch {
-            if (error as? NIOHTTPClientUpgradeError) != .responseProtocolNotFound {
-                XCTFail()
-            }
+        XCTAssertThrowsError(try clientChannel.writeInbound(clientChannel.allocator.buffer(string: response))) { error in
+            XCTAssertEqual(.responseProtocolNotFound, error as? NIOHTTPClientUpgradeError)
         }
-        
+
         // Close the pipeline.
         XCTAssertNoThrow(try clientChannel.close().wait())
     }
@@ -314,7 +287,7 @@ class WebSocketClientEndToEndTests: XCTestCase {
         
         let handler = WebSocketRecorderHandler()
         
-        let basicUpgrader = NIOWebClientSocketUpgrader(requestKey: "OfS0wDaT5NoxF2gqm7Zj2YtetzM=",
+        let basicUpgrader = NIOWebSocketClientUpgrader(requestKey: "OfS0wDaT5NoxF2gqm7Zj2YtetzM=",
                                                        upgradePipelineHandler: { (channel: Channel, _: HTTPResponseHead) in
                                                         channel.pipeline.addHandler(handler)
         })
@@ -326,7 +299,7 @@ class WebSocketClientEndToEndTests: XCTestCase {
         // Push the successful server response.
         let response = "HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept:yKEqitDFPE81FyIhKTm+ojBqigk=\r\n\r\n"
         
-        XCTAssertNoThrow(try clientChannel.writeInbound(ByteBuffer.forString(response)))
+        XCTAssertNoThrow(try clientChannel.writeInbound(clientChannel.allocator.buffer(string: response)))
         
         clientChannel.embeddedEventLoop.run()
         
@@ -379,6 +352,9 @@ class WebSocketClientEndToEndTests: XCTestCase {
     private func encodeFrame(dataString: String, opcode: WebSocketOpcode) throws -> (WebSocketFrame, [UInt8]) {
         
         let serverChannel = EmbeddedChannel()
+        defer {
+            XCTAssertNoThrow(try serverChannel.finish())
+        }
         
         var buffer = serverChannel.allocator.buffer(capacity: 11)
         buffer.writeString(dataString)
@@ -394,6 +370,9 @@ class WebSocketClientEndToEndTests: XCTestCase {
     func testReceiveAFewFrames() throws {
         
         let (clientChannel, recorder) = try self.runSuccessfulUpgrade()
+        defer {
+            XCTAssertNoThrow(try clientChannel.finish(acceptAlreadyClosed: true))
+        }
         
         // Listen out for a frame or two, to confirm that the Websocket pipeline works.
         let (binaryFrame, binaryFrameAsBytes) = try self.encodeFrame(dataString: "hello, back", opcode: .binary)

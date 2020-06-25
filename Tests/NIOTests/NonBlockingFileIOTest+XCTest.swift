@@ -24,6 +24,7 @@ import XCTest
 
 extension NonBlockingFileIOTest {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (NonBlockingFileIOTest) -> () throws -> Void)] {
       return [
                 ("testBasicFileIOWorks", testBasicFileIOWorks),
@@ -45,7 +46,13 @@ extension NonBlockingFileIOTest {
                 ("testFileRegionReadFromPipeFails", testFileRegionReadFromPipeFails),
                 ("testReadFromNonBlockingPipeFails", testReadFromNonBlockingPipeFails),
                 ("testSeekPointerIsSetToFront", testSeekPointerIsSetToFront),
+                ("testReadingFileSize", testReadingFileSize),
+                ("testChangeFileSizeShrink", testChangeFileSizeShrink),
+                ("testChangeFileSizeGrow", testChangeFileSizeGrow),
                 ("testWriting", testWriting),
+                ("testWriteMultipleTimes", testWriteMultipleTimes),
+                ("testWritingWithOffset", testWritingWithOffset),
+                ("testWritingBeyondEOF", testWritingBeyondEOF),
                 ("testFileOpenWorks", testFileOpenWorks),
                 ("testFileOpenWorksWithEmptyFile", testFileOpenWorksWithEmptyFile),
                 ("testFileOpenFails", testFileOpenFails),
@@ -55,6 +62,15 @@ extension NonBlockingFileIOTest {
                 ("testOpeningFilesForWritingAndReading", testOpeningFilesForWritingAndReading),
                 ("testOpeningFilesForWritingDoesNotImplyTruncation", testOpeningFilesForWritingDoesNotImplyTruncation),
                 ("testOpeningFilesForWritingCanUseTruncation", testOpeningFilesForWritingCanUseTruncation),
+                ("testReadFromOffset", testReadFromOffset),
+                ("testReadChunkedFromOffset", testReadChunkedFromOffset),
+                ("testReadChunkedFromNegativeOffsetFails", testReadChunkedFromNegativeOffsetFails),
+                ("testReadChunkedFromOffsetAfterEOFDeliversExactlyOneChunk", testReadChunkedFromOffsetAfterEOFDeliversExactlyOneChunk),
+                ("testReadChunkedFromEOFDeliversExactlyOneChunk", testReadChunkedFromEOFDeliversExactlyOneChunk),
+                ("testReadFromOffsetAfterEOFDeliversExactlyOneChunk", testReadFromOffsetAfterEOFDeliversExactlyOneChunk),
+                ("testReadFromEOFDeliversExactlyOneChunk", testReadFromEOFDeliversExactlyOneChunk),
+                ("testReadChunkedFromOffsetFileRegion", testReadChunkedFromOffsetFileRegion),
+                ("testReadManyChunks", testReadManyChunks),
            ]
    }
 }

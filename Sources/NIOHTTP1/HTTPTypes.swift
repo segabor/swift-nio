@@ -65,9 +65,7 @@ public struct HTTPRequestHead: Equatable {
             return self._storage.method
         }
         set {
-            if !isKnownUniquelyReferenced(&self._storage) {
-                self._storage = self._storage.copy()
-            }
+            self.copyStorageIfNotUniquelyReferenced()
             self._storage.method = newValue
         }
     }
@@ -78,9 +76,7 @@ public struct HTTPRequestHead: Equatable {
             return self._storage.uri
         }
         set {
-            if !isKnownUniquelyReferenced(&self._storage) {
-                self._storage = self._storage.copy()
-            }
+            self.copyStorageIfNotUniquelyReferenced()
             self._storage.uri = newValue
         }
     }
@@ -91,9 +87,7 @@ public struct HTTPRequestHead: Equatable {
             return self._storage.version
         }
         set {
-            if !isKnownUniquelyReferenced(&self._storage) {
-                self._storage = self._storage.copy()
-            }
+            self.copyStorageIfNotUniquelyReferenced()
             self._storage.version = newValue
         }
     }
@@ -121,6 +115,12 @@ public struct HTTPRequestHead: Equatable {
 
     public static func ==(lhs: HTTPRequestHead, rhs: HTTPRequestHead) -> Bool {
         return lhs.method == rhs.method && lhs.uri == rhs.uri && lhs.version == rhs.version && lhs.headers == rhs.headers
+    }
+    
+    private mutating func copyStorageIfNotUniquelyReferenced () {
+        if !isKnownUniquelyReferenced(&self._storage) {
+            self._storage = self._storage.copy()
+        }
     }
 }
 
@@ -192,9 +192,7 @@ public struct HTTPResponseHead: Equatable {
             return self._storage.status
         }
         set {
-            if !isKnownUniquelyReferenced(&self._storage) {
-                self._storage = self._storage.copy()
-            }
+            self.copyStorageIfNotUniquelyReferenced()
             self._storage.status = newValue
         }
     }
@@ -205,9 +203,7 @@ public struct HTTPResponseHead: Equatable {
             return self._storage.version
         }
         set {
-            if !isKnownUniquelyReferenced(&self._storage) {
-                self._storage = self._storage.copy()
-            }
+            self.copyStorageIfNotUniquelyReferenced()
             self._storage.version = newValue
         }
     }
@@ -224,6 +220,12 @@ public struct HTTPResponseHead: Equatable {
 
     public static func ==(lhs: HTTPResponseHead, rhs: HTTPResponseHead) -> Bool {
         return lhs.status == rhs.status && lhs.version == rhs.version && lhs.headers == rhs.headers
+    }
+    
+    private mutating func copyStorageIfNotUniquelyReferenced () {
+        if !isKnownUniquelyReferenced(&self._storage) {
+            self._storage = self._storage.copy()
+        }
     }
 }
 
@@ -407,7 +409,7 @@ public struct HTTPHeaders: CustomStringConvertible, ExpressibleByDictionaryLiter
     /// returns them in their original representation: that means that a comma-separated
     /// header field list may contain more than one entry, some of which contain commas
     /// and some do not. If you want a representation of the header fields suitable for
-    /// performing computation on, consider `getCanonicalForm`.
+    /// performing computation on, consider `subscript(canonicalForm:)`.
     ///
     /// - Parameter name: The header field name whose values are to be retrieved.
     /// - Returns: A list of the values for that header field name.
@@ -418,6 +420,25 @@ public struct HTTPHeaders: CustomStringConvertible, ExpressibleByDictionaryLiter
                 target.append(value)
             }
         }
+    }
+
+    /// Retrieves the first value for a given header field name from the block.
+    ///
+    /// This method uses case-insensitive comparisons for the header field name. It
+    /// does not return the first value from a maximally-decomposed list of the header fields,
+    /// but instead returns the first value from the original representation: that means
+    /// that a comma-separated header field list may contain more than one entry, some of
+    /// which contain commas and some do not. If you want a representation of the header fields
+    /// suitable for performing computation on, consider `subscript(canonicalForm:)`.
+    ///
+    /// - Parameter name: The header field name whose first value should be retrieved.
+    /// - Returns: The first value for the header field name.
+    public func first(name: String) -> String? {
+        guard !self.headers.isEmpty else {
+            return nil
+        }
+
+        return self.headers.first { header in header.0.isEqualCaseInsensitiveASCIIBytes(to: name) }?.1
     }
 
     /// Checks if a header is present
@@ -454,6 +475,21 @@ public struct HTTPHeaders: CustomStringConvertible, ExpressibleByDictionaryLiter
         }
 
         return result.flatMap { $0.split(separator: ",").map { $0.trimWhitespace() } }
+    }
+}
+
+extension HTTPHeaders {
+
+    /// The total number of headers that can be contained without allocating new storage.
+    public var capacity: Int {
+        return self.headers.capacity
+    }
+
+    /// Reserves enough space to store the specified number of headers.
+    ///
+    /// - Parameter minimumCapacity: The requested number of headers to store.
+    public mutating func reserveCapacity(_ minimumCapacity: Int) {
+        self.headers.reserveCapacity(minimumCapacity)
     }
 }
 
@@ -597,11 +633,11 @@ public enum HTTPMethod: Equatable {
     /// Whether requests with this verb may have a request body.
     internal var hasRequestBody: HasBody {
         switch self {
-        case .HEAD, .DELETE, .TRACE:
+        case .TRACE:
             return .no
         case .POST, .PUT, .PATCH:
             return .yes
-        case .GET, .CONNECT, .OPTIONS:
+        case .GET, .CONNECT, .OPTIONS, .HEAD, .DELETE:
             fallthrough
         default:
             return .unlikely
@@ -1003,6 +1039,7 @@ public enum HTTPResponseStatus {
     case `continue`
     case switchingProtocols
     case processing
+    // TODO: add '103: Early Hints' (requires bumping SemVer major).
 
     // 2xx
     case ok
@@ -1012,11 +1049,11 @@ public enum HTTPResponseStatus {
     case noContent
     case resetContent
     case partialContent
-
-    // 3xx
     case multiStatus
     case alreadyReported
     case imUsed
+
+    // 3xx
     case multipleChoices
     case movedPermanently
     case found
@@ -1046,10 +1083,8 @@ public enum HTTPResponseStatus {
     case rangeNotSatisfiable
     case expectationFailed
     case imATeapot
-    case unprocessableEntity
-
-    // 5xx
     case misdirectedRequest
+    case unprocessableEntity
     case locked
     case failedDependency
     case upgradeRequired
@@ -1057,6 +1092,8 @@ public enum HTTPResponseStatus {
     case tooManyRequests
     case requestHeaderFieldsTooLarge
     case unavailableForLegalReasons
+
+    // 5xx
     case internalServerError
     case notImplemented
     case badGateway
@@ -1168,6 +1205,8 @@ public enum HTTPResponseStatus {
             self = .rangeNotSatisfiable
         case 417:
             self = .expectationFailed
+        case 418:
+            self = .imATeapot
         case 421:
             self = .misdirectedRequest
         case 422:
@@ -1394,6 +1433,5 @@ extension HTTPMethod: RawRepresentable {
             default:
                 self = .RAW(value: rawValue)
         }
-        self = .RAW(value: rawValue)
     }
 }

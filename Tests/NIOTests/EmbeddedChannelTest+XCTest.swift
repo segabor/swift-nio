@@ -24,6 +24,7 @@ import XCTest
 
 extension EmbeddedChannelTest {
 
+   @available(*, deprecated, message: "not actually deprecated. Just deprecated to allow deprecated tests (which test deprecated functionality) without warnings")
    static var allTests : [(String, (EmbeddedChannelTest) -> () throws -> Void)] {
       return [
                 ("testWriteOutboundByteBuffer", testWriteOutboundByteBuffer),
@@ -46,6 +47,7 @@ extension EmbeddedChannelTest {
                 ("testSetRemoteAddressAfterSuccessfulConnect", testSetRemoteAddressAfterSuccessfulConnect),
                 ("testUnprocessedOutboundUserEventFailsOnEmbeddedChannel", testUnprocessedOutboundUserEventFailsOnEmbeddedChannel),
                 ("testEmbeddedChannelWritabilityIsWritable", testEmbeddedChannelWritabilityIsWritable),
+                ("testFinishWithRecursivelyScheduledTasks", testFinishWithRecursivelyScheduledTasks),
            ]
    }
 }
